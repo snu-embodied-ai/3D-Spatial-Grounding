@@ -1,0 +1,38 @@
+project: Spatial3D
+
+num_epochs: 100
+clip_grad_max_norm: 5
+
+Optimizer:
+  name: AdamW
+  kwargs:
+    lr: !!float 1e-8
+    betas: [0.9, 0.999]
+    weight_decay: 0.01
+
+Scheduler:
+  name: CosineAnnealingWarmUpRestarts
+  kwargs:
+    T_0: 20
+    T_mult: 1
+    eta_max: 0.05
+    T_up: 5
+    gamma: 0.5
+
+loss_type: [BCEWithLogitsLoss]
+
+freeze_pretrain: True
+text_encoder_in_CPU: True
+
+distributed: True
+train_gpu: [0,1]
+
+print_freq: 5
+
+
+output_dir: output
+ckpt_dir: output/ckpt
+
+Resume:
+  resume_training: False
+  resume_epoch: 0

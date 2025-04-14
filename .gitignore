@@ -1,0 +1,11 @@
+thirdparty/
+wandb/
+output/
+data/synthetic*
+3DCV.ipynb
+inspect.ipynb
+*.out
+__pycache__
+Pointnet2_PyTorch
+model/Uni3D/path/to/checkpoints/*
+model/Uni3D/path/to/clip_model/*

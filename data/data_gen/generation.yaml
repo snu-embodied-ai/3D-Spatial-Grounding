@@ -1,0 +1,14 @@
+scene:
+  num_objects: 9
+  num_samples: 20
+  between_threshold: 0.15
+  besides_threshold: 0.1
+  surface_width: 0.8
+  surface_height: 0.5
+  surface_thickness: 0.04
+  surface_grid_size: 0.002
+  surface_density: 7
+  describe_freespace: True
+
+graspnet_dir: /media/jslee/219db482-9799-4615-841a-d8f46e93e50c/home/kykwon/dataset/graspnet
+save_dir: /media/jslee/219db482-9799-4615-841a-d8f46e93e50c/home/kykwon/SpatialUnderstanding/data/synthetic_tabletop/9objects
