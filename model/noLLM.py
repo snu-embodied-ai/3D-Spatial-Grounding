@@ -242,13 +242,13 @@ class Spatial3D_lang(nn.Module):
 
         if self.non_parametric_queries:
             query_pos = einops.rearrange(vision_dict["heatmap_grid_centers"], "b r c d -> b (r c) d")
-            queries = einops.rearrange(vision_dict["output_heatmap"], "b r c -> b (r c)")             # Zero tensor
             query_mask = einops.rearrange(vision_dict["heatmap_masks"], "b r c -> b (r c)")
 
             query_pos.masked_fill(query_mask.unsqueeze(dim=-1) == 0, float("-inf"))
-            queries.masked_fill(query_mask == 0, float("-inf"))
-
             query_pos = self.query_projector(query_pos)
+
+            queries = torch.zeros_like(query_pos)
+            queries.masked_fill(query_mask.unsqueeze(dim=-1) == 0, float("-inf"))
         else:
             raise Exception("Not implemented parametric queries!!")
 

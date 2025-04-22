@@ -84,7 +84,7 @@ class Trainer():
 
     def compute_loss(self, v_dict):
         logits = v_dict["query_embedding"]
-        target = v_dict["heatmap_grid_centers"]
+        target = v_dict["heatmap_label"]
 
         loss = 0
 

@@ -35,7 +35,6 @@ def spatial_collate_fn(batch):
     batched_idx, batched_input_ids, batched_padding_mask, batched_position_ids = [], [], [], []
 
     batched_heatmap_label = torch.zeros((len(batch), max_width, max_height))
-    batched_output_heatmap = torch.zeros_like(batched_heatmap_label)
     batched_heatmap_masks = torch.zeros_like(batched_heatmap_label)
     batched_heatmap_centers = torch.zeros((len(batch), max_width, max_height, 2))
 
@@ -75,7 +74,6 @@ def spatial_collate_fn(batch):
         "centers": batched_centers,                         # (batch_size, num_groups, 3)
         "rotation_matrix": batched_rotation_matrix,         # (batch_size, 4, 4)
         "heatmap_label": batched_heatmap_label,             # (batch_size, row, col)
-        "output_heatmap": batched_output_heatmap,           # (batch_size, row, col)
         "heatmap_masks": batched_heatmap_masks,             # (batch_size, row, col)
         "heatmap_grid_centers": batched_heatmap_centers     # (batch_size, row, col, 2)
     }
@@ -131,7 +129,6 @@ class Spatial3DDataset(Dataset):
 
         pcd = o3d.io.read_point_cloud(glob.glob(os.path.join(sample_dir, "*.ply"))[0])
         heatmap_label = np.load(glob.glob(os.path.join(sample_dir, "*label*"))[0])
-        output_heatmap = np.zeros_like(heatmap_label)
 
         heatmap_centers = np.indices(heatmap_label.shape).transpose((1,2,0)) * self.grid_size + (self.grid_size/2)
 
@@ -160,7 +157,6 @@ class Spatial3DDataset(Dataset):
             "centers": torch.from_numpy(centers),                              # (num_groups, 3)
             "rotation_matrix": torch.from_numpy(rot_mat).float(),              # (4, 4)
             "heatmap_label": torch.from_numpy(heatmap_label).int(),            # (width, height)
-            "output_heatmap": torch.from_numpy(output_heatmap).int(),          # (width, height)
             "heatmap_grid_centers": torch.from_numpy(heatmap_centers).int(),            # (width, height, 2)
         }
 
