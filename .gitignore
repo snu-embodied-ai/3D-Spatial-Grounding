@@ -9,3 +9,4 @@ Pointnet2_PyTorch
 model/Uni3D/path/to/checkpoints/*
 model/Uni3D/path/to/clip_model/*
 *.tar*
+notes/

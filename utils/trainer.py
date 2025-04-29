@@ -83,7 +83,7 @@ class Trainer():
         self.model.load_state_dict(snapshot["model"])
 
     def compute_loss(self, v_dict):
-        logits = v_dict["query_embedding"]
+        logits = v_dict["output_heatmap"]
         target = v_dict["heatmap_label"]
 
         loss = 0
@@ -109,7 +109,7 @@ class Trainer():
         """
         all_acc = []
 
-        pred_heatmap = einops.rearrange(v_dict["query_embedding"], "b h w -> b (h w)")
+        pred_heatmap = einops.rearrange(v_dict["output_heatmap"], "b h w -> b (h w)")
         label_heatmap = einops.rearrange(v_dict["heatmap_label"], "b h w -> b (h w)")
 
         batch_size = pred_heatmap.size(0)
@@ -121,7 +121,7 @@ class Trainer():
             included = pred_point_on_label.sum(dim=-1) > 0
 
             if save_heatmap_img:
-                for idx, pred, label, accuracies in zip(l_dict["index"].cpu().numpy(), v_dict["query_embedding"].cpu().numpy(), v_dict["heatmap_label"].cpu().numpy(), included):
+                for idx, pred, label, accuracies in zip(l_dict["index"].cpu().numpy(), v_dict["output_heatmap"].cpu().numpy(), v_dict["heatmap_label"].cpu().numpy(), included):
                     table.add_data(f"{run_type}_{idx}", pred, label, accuracies)
 
             acc = included.sum()

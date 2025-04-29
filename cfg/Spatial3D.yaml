@@ -41,10 +41,19 @@ DINO:
 
   use_attention_decoder: True
 
+  Queries:
+    use_initialized_queries: True
+    non_parametric_queries: True
+    fix_num_queries: True
+    num_queries: 128
 
-  use_initialized_queries: True
-  non_parametric_queries: True
-  num_queries: 100
+
+TaskHead:
+  heatmap_gen_method: "basic_unet"          # "attention", "basic_unet", "nerf-style"
+  kernel_size: [5, 2, 2, 2]
+  strides: [5, 2, 2,2 ]
+  conv_channels: [1024, 256, 16, 2, 1]
+  conv_n_heads: [8, 8, 2, 1]
 
 
 use_whole_scene: False

@@ -93,13 +93,23 @@ class CrossAttentionLayer(nn.Module):
         self,
         d_model,
         nhead,
+        kdim=None,
+        vdim=None,
         dropout=0.0,
         activation="relu",
         normalize_before=False,
+        batch_first=True,
     ):
         super().__init__()
+        if kdim is None:
+            kdim = d_model
+        if vdim is None:
+            vdim = d_model
+        
         self.multihead_attn = nn.MultiheadAttention(
-            d_model, nhead, dropout=dropout
+            d_model, nhead, dropout=dropout,
+            kdim=kdim, vdim=vdim, 
+            batch_first=batch_first
         )
 
         self.norm = nn.LayerNorm(d_model)

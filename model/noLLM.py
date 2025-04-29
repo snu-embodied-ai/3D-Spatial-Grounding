@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -10,7 +12,9 @@ sys.path.extend([ROOT_DIR, CUR_DIR])
 from .Uni3D.models.uni3d import create_uni3d
 from .text_encoder.CLIP_text_encoder import OpenCLIPTextEncoder
 from .modules.transformer import BiDirectionalTransformerDecoder, BiDirectionalTransformerEncoder
+from .modules.attention import CrossAttentionLayer
 from .modules.helpers_3detr import GenericMLP
+from .modules.att_unet import AttUNet
 
 import hydra
 import einops
@@ -50,12 +54,20 @@ class Spatial3D_lang(nn.Module):
 
         self.transformer_input_dim = cfg["DINO"]["hidden_dim"]
         self.transformer_hidden_dim = cfg["DINO"]["dim_feedforward"]
-        self.num_queries = cfg["DINO"]["num_queries"]
+        
         self.transformer_num_heads = cfg["DINO"]["num_heads"]
         self.transformer_layer_num = cfg["DINO"]["num_biformers"]
-        self.non_parametric_queries = cfg["DINO"]["non_parametric_queries"]
 
-        
+        # DINO - Query related hyperparameters
+        self.fix_num_queries = cfg["DINO"]["Queries"]["fix_num_queries"]
+        self.non_parametric_queries = cfg["DINO"]["Queries"]["non_parametric_queries"]
+        self.num_queries = cfg["DINO"]["Queries"]["num_queries"]
+
+        # Task head - hyperparameters for heatmap generation
+        self.map_gen = cfg["TaskHead"]["heatmap_gen_method"]
+        self.conv_channels = cfg["TaskHead"]["conv_channels"]
+        self.conv_n_heads = cfg["TaskHead"]["conv_n_heads"]
+
         self.transformer_dropout = cfg["DINO"]["dropout"]
         self.transformer_pre_norm = cfg["DINO"]["pre_norm"]
 
@@ -114,9 +126,9 @@ class Spatial3D_lang(nn.Module):
             self.lang_pos_embed = nn.Embedding(self.lang_num_tokens, self.transformer_input_dim)
 
         # 3-3. Queuries
-        if self.non_parametric_queries:
+        if not self.fix_num_queries:
             self.query_projector = GenericMLP(
-                input_dim=self.heatmap_dimension,
+                input_dim=3,
                 hidden_dims=[self.transformer_input_dim//2, self.transformer_input_dim],
                 output_dim=self.transformer_input_dim,
                 use_conv=False,
@@ -125,8 +137,8 @@ class Spatial3D_lang(nn.Module):
             )
         else:
             # PARAMETRIC QUERIES
-            # learnable query features
-            self.query_feat = nn.Embedding(self.num_queries, self.transformer_input_dim)
+            # # learnable query features
+            # self.query_feat = nn.Embedding(self.num_queries, self.transformer_input_dim)
             # learnable query p.e.
             self.query_pos = nn.Embedding(self.num_queries, self.transformer_input_dim)
 
@@ -153,12 +165,30 @@ class Spatial3D_lang(nn.Module):
             use_whole_scene=self.use_whole_scene
         )
 
-        # 5. MLP head for mapping the candidate queries to heatmap output
-        self.heatmap_head = nn.Sequential(
-            nn.Linear(self.transformer_hidden_dim, 128),
-            nn.GELU(),
-            nn.Linear(128, self.heatmap_dimension)
-        )
+        # 5. Task head for mapping the candidate queries to heatmap output
+        # self.heatmap_pos = nn.Embedding()
+        if self.map_gen == "attention":
+            self.heatmap_generator = CrossAttentionLayer(
+                d_model=self.heatmap_dimension,
+                nhead=1,
+                kdim=self.transformer_hidden_dim,
+                vdim=self.transformer_hidden_dim,
+                activation="gelu",
+                normalize_before=self.transformer_pre_norm,
+                batch_first=True,
+            )
+        elif self.map_gen == "mlp":
+            pass
+        elif self.map_gen == "basic_unet":
+            self.att_unet = AttUNet(unet_cfg=cfg["TaskHead"],
+                                    kv_dim=self.transformer_hidden_dim,
+                                    dropout=self.transformer_dropout,
+                                    activation="gelu",
+                                    normalize_before=self.transformer_pre_norm,
+                                    batch_first=True)
+        else:
+            raise NotImplementedError("Other task heads aren't implemented besides Attention, MLP, UNet")
+        
 
     def freeze_pretrained_modules(self):
         """
@@ -241,14 +271,8 @@ class Spatial3D_lang(nn.Module):
         # TODO: Create Query Tokens as much as the output heatmap size. E.g. If the heatmap should be 50*60, then create 300 query tokens which corresponds to one voxel(pixel, region)
 
         if self.non_parametric_queries:
-            query_pos = einops.rearrange(vision_dict["heatmap_grid_centers"], "b r c d -> b (r c) d")
-            query_mask = einops.rearrange(vision_dict["heatmap_masks"], "b r c -> b (r c)")
-
-            query_pos.masked_fill(query_mask.unsqueeze(dim=-1) == 0, float("-inf"))
-            query_pos = self.query_projector(query_pos)
-
+            query_pos = self.query_projector(vision_dict["centers"])
             queries = torch.zeros_like(query_pos)
-            queries.masked_fill(query_mask.unsqueeze(dim=-1) == 0, float("-inf"))
         else:
             raise Exception("Not implemented parametric queries!!")
 
@@ -259,9 +283,17 @@ class Spatial3D_lang(nn.Module):
         vision_dict, language_dict = self.decoder(vision_dict, language_dict)
 
         # 7. Simple task head -> output the confidence (probability) for each voxel (pixel, region)
-        # OR you don't need any FFN since FFN is already included in the BiAttentionBlock (BiMultiHeadAttetion
-        queries = self.heatmap_head(queries)
-        vision_dict["query_embedding"] = queries
+        if self.map_gen == "attention":
+            pass
+        elif self.map_gen == "mlp":
+            pass
+        elif self.map_gen == "basic_unet":
+            heatmap = self.att_unet(vision_dict["heatmap_grid_centers"],
+                                    vision_dict["query_embedding"])
+        else:
+            NotImplementedError("Other task heads aren't implemented besides Attention, MLP, UNet")
+        
+        vision_dict["output_heatmap"] = heatmap
 
         # 8. Return Final Output - The query outputs are logits
         return vision_dict, language_dict
