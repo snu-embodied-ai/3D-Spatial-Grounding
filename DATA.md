@@ -3,7 +3,7 @@
 ## Environments
 - Python 3.10
 
-### Installing PointNet++
+### Installing Open3d
 ```
 pip3 install open3d
 ```
