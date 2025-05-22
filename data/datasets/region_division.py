@@ -132,6 +132,7 @@ class RegionDivider:
                 sample_idx = np.random.choice(len(region), self.points_per_region, replace=False)
                 all_regions.append(region[sample_idx])
                 all_masks.append(np.ones(self.points_per_region))
+                all_centers.append(lst_center[i])
             elif self.region_threshold < len(region) < self.points_per_region:
                 points = np.zeros((self.points_per_region, sort_feats.shape[-1]))
                 points[:len(region)] = region
@@ -140,8 +141,9 @@ class RegionDivider:
                 mask = np.zeros(self.points_per_region)
                 mask[:len(region)] = 1
                 all_masks.append(mask)
-            
-            all_centers.append(lst_center[i])
+                all_centers.append(lst_center[i])
+            else:
+                pass
             
         all_regions = np.stack(all_regions, axis=0)
         all_masks = np.stack(all_masks, axis=0)

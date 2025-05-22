@@ -24,9 +24,10 @@ class SelfAttentionLayer(nn.Module):
         dropout=0.0,
         activation="relu",
         normalize_before=False,
+        batch_first=True
     ):
         super().__init__()
-        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=batch_first)
 
         self.norm = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)

@@ -13,7 +13,11 @@ from .tokenizer import SimpleTokenizer
 
 def load_text_encoder(model_cfg):
     pretrained_path = os.path.join(ROOT_DIR, model_cfg["CLIP"]["pretrained_path"])
-    text_encoder = OpenCLIPTextEncoder(model_name=model_cfg["CLIP"]["model_name"],pretrained_path=pretrained_path,)
+    if model_cfg["CLIP"]["to_CPU"]:
+        device = 'cpu'
+    else:
+        device = 'cuda'
+    text_encoder = OpenCLIPTextEncoder(model_name=model_cfg["CLIP"]["model_name"],pretrained_path=pretrained_path, device=device)
 
     return text_encoder
 
@@ -74,7 +78,8 @@ def generate_masks_with_special_tokens_and_transfer_map(
 class OpenCLIPTextEncoder(nn.Module):
     def __init__(self, model_name: str,
                  pretrained_path: str,
-                 use_sub_sentence_represent=False):
+                 use_sub_sentence_represent=False,
+                 device='cuda'):
         """
         - `use_sub_sentence_represent`:  (bool, optional): whether to use sub
             sentence represent introduced in `Grounding DINO
@@ -87,7 +92,7 @@ class OpenCLIPTextEncoder(nn.Module):
  
         self.use_sub_sentence_represent = use_sub_sentence_represent
 
-        self.text_encoder = open_clip.create_model(model_name=model_name, pretrained=pretrained_path)
+        self.text_encoder = open_clip.create_model(model_name=model_name, pretrained=pretrained_path, device=device)
 
         self._tokenizer = SimpleTokenizer()
     

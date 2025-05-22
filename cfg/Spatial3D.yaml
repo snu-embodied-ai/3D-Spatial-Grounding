@@ -18,10 +18,10 @@ CLIP:
   pretrained_path: model/Uni3D/path/to/clip_model/open_clip_pytorch_model.bin
   context_length: 77
   hidden_dim: 1024
-  to_CPU: True
+  to_CPU: False
 
 DINO:
-  use_embed2trans_projector: False
+  use_embed2trans_projector: True
   use_shared_embed2trans_projector: False
   vision_position_encoding: learnable       # learnable, sine, sequential
   text_position_encoding: learnable         # learnable, sine, sequential
@@ -36,28 +36,36 @@ DINO:
   # positional_encoding_type: fourier
   # gauss_scale: 1.0
   # hlevels: [0,1,2,3]
-  clip_classifier: True
+  # clip_classifier: True
   temperature: 0.1
 
   use_attention_decoder: True
 
   Queries:
-    use_initialized_queries: True
-    non_parametric_queries: True
-    fix_num_queries: True
     num_queries: 128
 
 
-TaskHead:
-  heatmap_gen_method: "basic_unet"          # "attention", "basic_unet", "nerf-style"
-  kernel_size: [5, 2, 2, 2]
-  strides: [5, 2, 2,2 ]
-  conv_channels: [1024, 256, 16, 2, 1]
-  conv_n_heads: [8, 8, 2, 1]
+OccupancyHead:
+  heatmap_gen_method: "basic_unet"          # "self attention", "cross attention", "basic_unet"
+  num_tokens: 350
+  heatmap_shape: [400, 250]
+  kernel_size: [5, 2, 1]
+  strides: [5, 2, 1]
+  conv_channels: [1024, 256, 16, 4]
+  occ_conv_channels: [1024, 256, 16, 4]
+  conv_n_heads: [8, 8, 1]
+  dropout: 0.2
 
+HeatmapHead:
+  heatmap_gen_method: "basic_unet"          # "self attention", "cross attention", "basic_unet"
+  num_tokens: 128
+  heatmap_shape: [400, 250]
+  kernel_size: [5, 2, 1]
+  strides: [5, 2, 1]
+  conv_channels: [1024, 128, 2, 1]
+  occ_conv_channels: [1024, 128, 2, 1]
+  conv_n_heads: [8, 8, 1]
+  dropout: 0.2
 
 use_whole_scene: False
-
 distributed: False
-
-heatmap_dimension: 2

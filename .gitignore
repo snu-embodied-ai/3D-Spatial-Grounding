@@ -5,8 +5,9 @@ data/synthetic*
 *.ipynb
 *.out
 __pycache__
-Pointnet2_PyTorch
+Pointnet2_PyTorch/*
 model/Uni3D/path/to/checkpoints/*
 model/Uni3D/path/to/clip_model/*
 *.tar*
 notes/
+data/RoboSpatial

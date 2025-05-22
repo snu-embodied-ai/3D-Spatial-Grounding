@@ -161,7 +161,7 @@ class BiDirectionalTransformerDecoder(nn.Module):
             queries = self.cross_attentions[i](tgt=queries,
                                                memory=vis_embed,
                                                memory_mask=None,
-                                               memory_key_padding=None,
+                                               memory_key_padding_mask=None,
                                                pos=vis_pos,
                                                query_pos=query_pos)
             

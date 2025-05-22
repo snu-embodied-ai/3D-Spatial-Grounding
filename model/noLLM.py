@@ -1,8 +1,5 @@
-import math
-
 import torch
 import torch.nn as nn
-from torch.nn import functional as F
 
 import os, sys
 CUR_DIR = os.path.dirname(__file__)
@@ -10,14 +7,8 @@ ROOT_DIR = os.path.abspath(os.path.join(CUR_DIR, os.pardir))
 sys.path.extend([ROOT_DIR, CUR_DIR])
 
 from .Uni3D.models.uni3d import create_uni3d
-from .text_encoder.CLIP_text_encoder import OpenCLIPTextEncoder
 from .modules.transformer import BiDirectionalTransformerDecoder, BiDirectionalTransformerEncoder
-from .modules.attention import CrossAttentionLayer
-from .modules.helpers_3detr import GenericMLP
-from .modules.att_unet import AttUNet
-
-import hydra
-import einops
+from .modules.map_generator import OccupancyMapGenerator, HeatMapGenerator
 
 
 class Spatial3D_lang(nn.Module):
@@ -41,7 +32,6 @@ class Spatial3D_lang(nn.Module):
 
         # 0. Setting Hyperparmeters & Variables
         self.use_whole_scene = cfg["use_whole_scene"]
-        self.heatmap_dimension = cfg["heatmap_dimension"]
         
         self.encoded_hidden_dim = cfg["CLIP"]["hidden_dim"]
         self.lang_num_tokens = cfg["CLIP"]["context_length"]
@@ -57,27 +47,15 @@ class Spatial3D_lang(nn.Module):
         
         self.transformer_num_heads = cfg["DINO"]["num_heads"]
         self.transformer_layer_num = cfg["DINO"]["num_biformers"]
-
-        # DINO - Query related hyperparameters
-        self.fix_num_queries = cfg["DINO"]["Queries"]["fix_num_queries"]
-        self.non_parametric_queries = cfg["DINO"]["Queries"]["non_parametric_queries"]
-        self.num_queries = cfg["DINO"]["Queries"]["num_queries"]
-
-        # Task head - hyperparameters for heatmap generation
-        self.map_gen = cfg["TaskHead"]["heatmap_gen_method"]
-        self.conv_channels = cfg["TaskHead"]["conv_channels"]
-        self.conv_n_heads = cfg["TaskHead"]["conv_n_heads"]
-
         self.transformer_dropout = cfg["DINO"]["dropout"]
         self.transformer_pre_norm = cfg["DINO"]["pre_norm"]
 
-        # # 1. Load pretrained Text encoder - CLIP pretrained text encoder
-        # pretrained_path = os.path.join(ROOT_DIR, cfg["CLIP"]["pretrained_path"])
-        # self.text_encoder = OpenCLIPTextEncoder(model_name=cfg["CLIP"]["model_name"],
-        #                                        pretrained_path=pretrained_path,)
+        # DINO - Query related hyperparameters
+        self.num_queries = cfg["DINO"]["Queries"]["num_queries"]
 
+        # Task head - hyperparameters for heatmap generation
 
-        # 2. Load 3D point cloud encoders
+        # 1. Load 3D point cloud encoders
         # TODO : Also implement a RGBD version
         if self.use_whole_scene:
             # Create Scene Encoder
@@ -92,29 +70,29 @@ class Spatial3D_lang(nn.Module):
         self.region_encoder.load_state_dict(sd)
 
 
-        # 3. Learnable Queries/Position & Projectors
-        # 3-1. Projectors
+        # 2. Learnable Queries/Position & Projectors
+        # 2-1. Projectors
         if self.use_embed2trans and not self.use_shared_embed2trans:
             self.vis_projector = nn.Sequential(
                 nn.Linear(self.encoded_hidden_dim, self.encoded_hidden_dim),
-                nn.ReLU(),
+                nn.GELU(),
                 nn.Linear(self.encoded_hidden_dim, self.transformer_input_dim)
             )
 
             self.lang_projector = nn.Sequential(
                 nn.Linear(self.encoded_hidden_dim, self.encoded_hidden_dim),
-                nn.ReLU(),
+                nn.GELU(),
                 nn.Linear(self.encoded_hidden_dim, self.transformer_input_dim)
             )
 
         elif self.use_embed2trans and self.use_shared_embed2trans:
             self.shared_projector = nn.Sequential(
                 nn.Linear(self.encoded_hidden_dim, self.encoded_hidden_dim),
-                nn.ReLU(),
+                nn.GELU(),
                 nn.Linear(self.encoded_hidden_dim, self.transformer_input_dim)
             )
         
-        # 3-2. Positional Encoding
+        # 2-2. Positional Encoding
         if self.vis_pos_enc_type == "learnable":
             self.vis_pos_embed = nn.Sequential(
                 nn.Linear(3, 128),
@@ -125,24 +103,10 @@ class Spatial3D_lang(nn.Module):
         if self.lang_pos_enc_type == "learnable":
             self.lang_pos_embed = nn.Embedding(self.lang_num_tokens, self.transformer_input_dim)
 
-        # 3-3. Queuries
-        if not self.fix_num_queries:
-            self.query_projector = GenericMLP(
-                input_dim=3,
-                hidden_dims=[self.transformer_input_dim//2, self.transformer_input_dim],
-                output_dim=self.transformer_input_dim,
-                use_conv=False,
-                output_use_activation=True,
-                hidden_use_bias=True,
-            )
-        else:
-            # PARAMETRIC QUERIES
-            # # learnable query features
-            # self.query_feat = nn.Embedding(self.num_queries, self.transformer_input_dim)
-            # learnable query p.e.
-            self.query_pos = nn.Embedding(self.num_queries, self.transformer_input_dim)
+        # 2-3. Queries
+        self.query_pos = nn.Embedding(self.num_queries, self.transformer_input_dim)
 
-        # 4. Load Bidirectional Transformer Encoder
+        # 3. Load Bidirectional Transformer Encoder
         self.encoder = BiDirectionalTransformerEncoder(
             v_dim=self.transformer_input_dim,
             l_dim=self.transformer_input_dim,
@@ -165,29 +129,23 @@ class Spatial3D_lang(nn.Module):
             use_whole_scene=self.use_whole_scene
         )
 
+        # 5. Task head for generating occupancy map
+        self.occupany_map_generator = OccupancyMapGenerator(
+            embedding_dim=self.transformer_hidden_dim,
+            nhead=self.transformer_num_heads,
+            activation="gelu",
+            pre_norm=self.transformer_pre_norm,
+            taskhead_cfg=cfg["OccupancyHead"],
+            dropout=self.transformer_dropout)
+
         # 5. Task head for mapping the candidate queries to heatmap output
-        # self.heatmap_pos = nn.Embedding()
-        if self.map_gen == "attention":
-            self.heatmap_generator = CrossAttentionLayer(
-                d_model=self.heatmap_dimension,
-                nhead=1,
-                kdim=self.transformer_hidden_dim,
-                vdim=self.transformer_hidden_dim,
-                activation="gelu",
-                normalize_before=self.transformer_pre_norm,
-                batch_first=True,
-            )
-        elif self.map_gen == "mlp":
-            pass
-        elif self.map_gen == "basic_unet":
-            self.att_unet = AttUNet(unet_cfg=cfg["TaskHead"],
-                                    kv_dim=self.transformer_hidden_dim,
-                                    dropout=self.transformer_dropout,
-                                    activation="gelu",
-                                    normalize_before=self.transformer_pre_norm,
-                                    batch_first=True)
-        else:
-            raise NotImplementedError("Other task heads aren't implemented besides Attention, MLP, UNet")
+        self.heatmap_generator = HeatMapGenerator(
+            nhead=1,
+            hidden_dim=self.transformer_hidden_dim,
+            activation="gelu",
+            pre_norm=self.transformer_pre_norm,
+            taskhead_cfg=cfg["HeatmapHead"],
+            dropout=self.transformer_dropout)
         
 
     def freeze_pretrained_modules(self):
@@ -199,7 +157,7 @@ class Spatial3D_lang(nn.Module):
             for param in module:
                 param.requires_grad = False
 
-        trainable_params = [p for p in self.parameters() if p.requires_grad == True]
+        trainable_params = [p for p in self.parameters() if p.requires_grad]
 
         return trainable_params
 
@@ -208,26 +166,12 @@ class Spatial3D_lang(nn.Module):
         """
         vision_dict : Vision data dict
         langauge_dict: Language data dict - language descriptions are already tokenized before the forward operation
-        """
+        """    
 
-        # 1. Extract Text embedding from CLIP text encoder
-        # Send 
-        # if self.encode_text_in_cpu:
-        #     for data in language_dict.values():
-        #         data.to('cpu')
-
-        # language_dict = self.text_encoder(language_dict)
-
-        # current_device = vision_dict["divided_xyz"].device
-        # new_dict = {}
-        # for key, data in language_dict.items():
-        #     new_dict[key] = data.to(current_device)
-        # language_dict.update(new_dict)
-
-        # 2. Extract Vision embedding (Point cloud) from pretrained Uni3D
+        # 1. Extract Vision embedding (Point cloud) from pretrained Uni3D
         vision_dict = self.region_encoder(vision_dict)
 
-        # 3. Project the embeddings to the feature space of the fusion module
+        # 2. Project the embeddings to the feature space of the fusion module
         if self.use_whole_scene:
             pass
         else:
@@ -251,7 +195,7 @@ class Spatial3D_lang(nn.Module):
                     vision_dict["region_embedding"] = proj_vis_embed
                     language_dict["input_ids"] = proj_lang_embed
 
-        # 4. Get Vision / Language Positional Embeddings
+        # 3. Get Vision / Language Positional Embeddings
         if self.vis_pos_enc_type == "learnable":
             vision_dict["region_position_encoding"] = self.vis_pos_embed(vision_dict["centers"])
         else:
@@ -264,36 +208,39 @@ class Spatial3D_lang(nn.Module):
             # For sine encoding and other encoding
             pass
         
-        # 5. Pass the encoder
+        # 4. Pass the encoder
         vision_dict, language_dict = self.encoder(vision_dict, language_dict)
+
+        # 5. Generate Occupancy map
+        occupancy_map = self.occupany_map_generator(vision_dict["heatmap_grid_centers"],
+                                                    vision_dict["region_embedding"],
+                                                    vision_dict["region_position_encoding"])
+        vision_dict["output_occupancy_map"] = occupancy_map
+        # print("OCCUPANCY!!!!\n")
+        # print(occupancy_map[0])
+        # print(occupancy_map.max(), occupancy_map.min())
+
 
         # 6. Initialize the Queries
         # TODO: Create Query Tokens as much as the output heatmap size. E.g. If the heatmap should be 50*60, then create 300 query tokens which corresponds to one voxel(pixel, region)
 
-        if self.non_parametric_queries:
-            query_pos = self.query_projector(vision_dict["centers"])
-            queries = torch.zeros_like(query_pos)
-        else:
-            raise Exception("Not implemented parametric queries!!")
-
+        cur_device = vision_dict["centers"].device
+        B = vision_dict["centers"].size(0)
+        queries = torch.zeros((B, self.num_queries, self.transformer_hidden_dim)).to(cur_device)
         vision_dict["query_embedding"] = queries
-        vision_dict["query_position_encoding"] = query_pos
+        vision_dict["query_position_encoding"] = self.query_pos.weight
 
         # 6. Pass the decoder
         vision_dict, language_dict = self.decoder(vision_dict, language_dict)
 
-        # 7. Simple task head -> output the confidence (probability) for each voxel (pixel, region)
-        if self.map_gen == "attention":
-            pass
-        elif self.map_gen == "mlp":
-            pass
-        elif self.map_gen == "basic_unet":
-            heatmap = self.att_unet(vision_dict["heatmap_grid_centers"],
-                                    vision_dict["query_embedding"])
-        else:
-            NotImplementedError("Other task heads aren't implemented besides Attention, MLP, UNet")
-        
+        # 7. Generate Heatmap
+        heatmap = self.heatmap_generator(vision_dict["heatmap_grid_centers"],
+                                         vision_dict["query_embedding"],
+                                         vision_dict["query_position_encoding"])
         vision_dict["output_heatmap"] = heatmap
+        # print("HEATMAP!!!!\n")
+        # print(heatmap[0])
+        # print(heatmap.max(), heatmap.min())
 
         # 8. Return Final Output - The query outputs are logits
         return vision_dict, language_dict

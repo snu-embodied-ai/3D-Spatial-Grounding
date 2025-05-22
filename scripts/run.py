@@ -1,7 +1,7 @@
 import argparse
 import yaml
 
-import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 import os, sys
@@ -22,14 +22,14 @@ TODO:
     - However, implement the full code without DDP first. Then, insert more codes to enable DDP. I think finishing the code is much more important, and check if my code is running well.
 """
 
-def ddp_setup():
-    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+def ddp_setup(device_id):
+    torch.cuda.set_device(device_id)
     init_process_group(backend="nccl")
 
 def main(args):
-    ddp_setup()
-
     # ======= 1. Selecting the device for train/evaluation ======================
+    # dev_id = int(os.environ["LOCAL_RANK"])
+    # ddp_setup(dev_id)
     # device = get_device()
 
     # ======= 2. Load configuration files =================================
@@ -51,10 +51,8 @@ def main(args):
     text_encoder = load_text_encoder(model_config)
 
     if config["freeze_pretrain"]:
-        trainable_param_groups = model.freeze_pretrained_modules()
         for param in text_encoder.parameters():
             param.requires_grad = False
-        config["Optimizer"]["trainable_param_groups"] = trainable_param_groups
 
     tokenizer = text_encoder.tokenizer
 
@@ -79,7 +77,7 @@ def main(args):
     else:
         raise Exception("CODE ERROR. Wrond argument has been inserted to run_type")
     
-    destroy_process_group()
+    # destroy_process_group()
     
 
 

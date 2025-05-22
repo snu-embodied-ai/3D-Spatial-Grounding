@@ -144,7 +144,7 @@ class Encoder(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv1d(512, self.encoder_channel, 1)
         )
-    def forward(self, point_groups):
+    def forward(self, point_groups, mask):
         '''
             point_groups : B G N 3
             -----------------
@@ -152,12 +152,21 @@ class Encoder(nn.Module):
         '''
         bs, g, n , _ = point_groups.shape
         point_groups = point_groups.reshape(bs * g, n, 6)
+        mask = mask.reshape(bs * g, n).unsqueeze(1)
+
         # encoder
         feature = self.first_conv(point_groups.transpose(2,1))  # BG 256 n
-        feature_global = torch.max(feature,dim=2,keepdim=True)[0]  # BG 256 1
+
+        # Apply masking
+        feature_global = torch.max(feature.masked_fill(mask == 0, float("-inf")),dim=2,keepdim=True)[0]  # BG 256 1
+        feature_global[feature_global == float("-inf")] = 0
         feature = torch.cat([feature_global.expand(-1,-1,n), feature], dim=1)# BG 512 n
+        feature = feature.masked_fill(mask == 0, 0)
+
         feature = self.second_conv(feature) # BG 1024 n
-        feature_global = torch.max(feature, dim=2, keepdim=False)[0] # BG 1024
+
+        feature_global = torch.max(feature.masked_fill(mask == 0, float("-inf")), dim=2, keepdim=False)[0] # BG 1024
+        feature_global[feature_global == float("-inf")] = 0
         return feature_global.reshape(bs, g, self.encoder_channel)
 
 class PointcloudEncoder(nn.Module):
@@ -237,27 +246,30 @@ class RegionPointcloudEncoder(PointcloudEncoder):
         mask = data_dict["mask"].unsqueeze(dim=-1)
         centers = data_dict["centers"]
 
-        divided_xyz = divided_xyz.masked_fill(mask == 0, float("-inf"))
-        divided_feature = divided_feature.masked_fill(mask == 0, float("-inf"))
+        divided_xyz *= mask
+        divided_feature *= mask
 
-        centers_mask = mask.mean(dim=-2) == 0
-        centers = centers.masked_fill(centers_mask, float("-inf"))
+        group_mask = mask.mean(dim=-2) != 0             # (B, G, 1)
+        centers *= group_mask
 
         # 1. Encode point cloud data
         # Uni3D encoder takes xyz & rgb data as input!
-        region_input_tokens = self.encoder(divided_feature)
+        region_input_tokens = self.encoder(divided_feature, mask)
         region_input_tokens = self.encoder2trans(region_input_tokens)
+        region_input_tokens *= group_mask
 
         # 2. Preparing input to Transformer (ViT) - CLS token & positional embeddings
         # CLS token & CLS token positional embedding
         cls_tokens = self.cls_token.expand(region_input_tokens.size(0), -1, -1)  
         cls_pos = self.cls_pos.expand(region_input_tokens.size(0), -1, -1)
+        cls_mask = torch.ones((region_input_tokens.size(0), 1, 1)).to(mask.device)
 
         # Positional embedding for each regions
-        pos = self.pos_embed(centers)
+        pos = self.pos_embed(centers) * group_mask
 
         # Final input to the transformer
         x = torch.cat((cls_tokens, region_input_tokens), dim=1)
+        group_mask = torch.cat((cls_mask, group_mask), dim=1)
         x = x + torch.cat((cls_pos, pos), dim=1)
 
         # a patch_dropout of 0. would mean it is disabled and this function would do nothing but return what was passed in
@@ -269,11 +281,13 @@ class RegionPointcloudEncoder(PointcloudEncoder):
         # ModuleList not support forward
         for i, blk in enumerate(self.visual.blocks):
             x = blk(x)
+            x *= group_mask
         # Final output of the region tokens + layer norm
         x = self.visual.norm(x)
         x = self.visual.fc_norm(x)
 
         x = self.trans2embed(x)
+        x *= group_mask
 
         cls_embed = x[:, 0:1, :]
         pcd_embed = x[:, 1:, :]
