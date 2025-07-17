@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from pointnet2_ops import pointnet2_utils
+import einops
 
 import logging
 
@@ -146,7 +147,7 @@ class Encoder(nn.Module):
         )
     def forward(self, point_groups, mask):
         '''
-            point_groups : B G N 3
+            point_groups : B G N 6
             -----------------
             feature_global : B G C
         '''
@@ -155,19 +156,19 @@ class Encoder(nn.Module):
         mask = mask.reshape(bs * g, n).unsqueeze(1)
 
         # encoder
-        feature = self.first_conv(point_groups.transpose(2,1))  # BG 256 n
+        feature1 = self.first_conv(point_groups.transpose(2,1))  # BG 256 n
 
         # Apply masking
-        feature_global = torch.max(feature.masked_fill(mask == 0, float("-inf")),dim=2,keepdim=True)[0]  # BG 256 1
-        feature_global[feature_global == float("-inf")] = 0
-        feature = torch.cat([feature_global.expand(-1,-1,n), feature], dim=1)# BG 512 n
-        feature = feature.masked_fill(mask == 0, 0)
+        feature_global1 = torch.max(feature1.masked_fill(mask == 0, float("-inf")),dim=2,keepdim=True)[0]  # BG 256 1
+        feature_global1[feature_global1 == float("-inf")] = 0
+        feature_cat = torch.cat([feature_global1.expand(-1,-1,n), feature1], dim=1)# BG 512 n
+        feature_cat = feature_cat.masked_fill(mask == 0, 0)
 
-        feature = self.second_conv(feature) # BG 1024 n
+        feature2 = self.second_conv(feature_cat) # BG 512 n
 
-        feature_global = torch.max(feature.masked_fill(mask == 0, float("-inf")), dim=2, keepdim=False)[0] # BG 1024
-        feature_global[feature_global == float("-inf")] = 0
-        return feature_global.reshape(bs, g, self.encoder_channel)
+        feature_global2 = torch.max(feature2.masked_fill(mask == 0, float("-inf")), dim=2, keepdim=False)[0] # BG 512
+        feature_global2[feature_global2 == float("-inf")] = 0
+        return feature_global2.reshape(bs, g, self.encoder_channel), feature2, feature1
 
 class PointcloudEncoder(nn.Module):
     def __init__(self, point_transformer, cfg):
@@ -254,7 +255,10 @@ class RegionPointcloudEncoder(PointcloudEncoder):
 
         # 1. Encode point cloud data
         # Uni3D encoder takes xyz & rgb data as input!
-        region_input_tokens = self.encoder(divided_feature, mask)
+        region_input_tokens, feature2, feature1 = self.encoder(divided_feature, mask)
+        feature2 = F.normalize(feature2, dim=-2)
+        feature1 = F.normalize(feature1, dim=-2)
+
         region_input_tokens = self.encoder2trans(region_input_tokens)
         region_input_tokens *= group_mask
 
@@ -289,7 +293,87 @@ class RegionPointcloudEncoder(PointcloudEncoder):
         x = self.trans2embed(x)
         x *= group_mask
 
-        cls_embed = x[:, 0:1, :]
-        pcd_embed = x[:, 1:, :]
+        cls_embed = F.normalize(x[:, 0:1, :], dim=-1)
+        pcd_embed = F.normalize(x[:, 1:, :], dim=-1)
 
-        return F.normalize(cls_embed, dim=-1), F.normalize(pcd_embed, dim=-1)
+        return cls_embed, pcd_embed, feature2, feature1
+    
+
+class RegionPointCloudDecoder(nn.Module):
+    def __init__(self, 
+                 input_dim: int,
+                 inter_dim: int,
+                 points_per_region: int,
+                 num_tokens: int):
+        super(RegionPointCloudDecoder, self).__init__()
+        self.points_per_region = points_per_region
+        self.num_tokens = num_tokens
+
+        self.trans2embed = nn.Linear(input_dim, inter_dim)
+
+        self.first_conv = nn.Sequential(
+            nn.Conv1d(
+                in_channels=inter_dim * 2,
+                out_channels=inter_dim * 2,
+                kernel_size=1,
+                stride=1
+            ),
+            nn.BatchNorm1d(inter_dim * 2),
+            nn.GELU(),
+            nn.Conv1d(
+                in_channels=inter_dim * 2,
+                out_channels=256,
+                kernel_size=1,
+                stride=1
+            )
+        )
+
+        self.second_conv = nn.Sequential(
+            nn.Conv1d(
+                in_channels=256 * 2,
+                out_channels=256 * 2,
+                kernel_size=1,
+                stride=1
+            ),
+            nn.BatchNorm1d(256 * 2),
+            nn.GELU(),
+            nn.Conv1d(
+                in_channels=256 * 2,
+                out_channels=256,
+                kernel_size=1,
+                stride=1
+            )
+        )
+
+        self.clf = nn.Linear(256, 1)
+
+    def forward(self, vision_dict: dict):
+        # query : (B, num_tokens, 1024)
+        query = vision_dict["region_embedding"]
+        query_pos = vision_dict["region_position_encoding"]
+
+        # query : (B, num_tokens, 512)
+        query = self.trans2embed(query)
+
+        # inter_feat2 : (B * num_tokens, 512, points_per_region)
+        # inter_feat1 : (B * num_tokens, 256, points_per_region)
+        inter_feat2, inter_feat1 = vision_dict["intermediate_features"]
+
+        query = einops.rearrange(query, 'b g f -> (b g) f 1').expand(-1,-1, self.points_per_region)
+        # (B * num_tokens, 1024, points_per_region)
+        feature = torch.cat([query, inter_feat2], dim=1)
+
+        # (B * num_tokens, 256, points_per_region)
+        feature = self.first_conv(feature)
+
+        # (B * num_tokens, 512, points_per_region)
+        feature = torch.cat([feature, inter_feat1], dim=1)
+
+        # (B * num_tokens, 256, points_per_region)
+        out = self.second_conv(feature)
+
+        # (B * num_tokens, points_per_region, 1)
+        out = self.clf(einops.rearrange(out, '(b g) f p -> b g p f', g=self.num_tokens))
+        vision_dict["output_logits"] = out
+
+        return vision_dict

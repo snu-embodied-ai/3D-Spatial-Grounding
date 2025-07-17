@@ -16,7 +16,6 @@ def main(args):
 
     """
     The DATASET GENERATION STEPS
-비밀번
     **Hyperparameters**
     - `num_objects` : Number of objects to include in the whole scene
     - `include_duplicates` : Whether to include duplicate objects for the main objects \\

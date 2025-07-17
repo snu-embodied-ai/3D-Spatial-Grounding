@@ -17,7 +17,7 @@ sys.path.extend([ROOT_DIR, CUR_DIR])
 from utils.util import *
 from utils.losses import create_loss_func
 from utils.optimizer_and_scheduler import create_optimizer_and_scheduler
-from utils.util import accuracy_and_save_img
+from utils.util import accuracy_and_save_points
 
 class Trainer():
     def __init__(self, 
@@ -30,16 +30,12 @@ class Trainer():
         # Training Parameters
         self.output_dir = os.path.join(ROOT_DIR, train_cfg["output_dir"])
         self.ckpt_dir = os.path.join(self.output_dir, "ckpt")
-        self.output_heatmap_dir = os.path.join(self.output_dir, "heatmap")
+        self.output_pred_dir = os.path.join(self.output_dir, "pred")
 
         self.gpu_id = int(os.environ["LOCAL_RANK"])
 
         self.model = model.to(self.gpu_id)
         self.text_encoder = text_encoder
-        # if model_cfg["CLIP"]["to_CPU"]:
-        #     self.text_encoder = text_encoder
-        # else:
-        #     self.text_encoder = text_encoder.to(self.gpu_id)
 
         self.model_cfg = model_cfg
         self.model_type = model_cfg["model"]
@@ -71,8 +67,8 @@ class Trainer():
         # 2. Creating the output directory & checkpoint directory if doesn't exist
         if not os.path.exists(self.ckpt_dir):
             os.makedirs(self.ckpt_dir, exist_ok=True)
-        if not os.path.exists(self.output_heatmap_dir):
-            os.makedirs(self.output_heatmap_dir, exist_ok=True)
+        if not os.path.exists(self.output_pred_dir):
+            os.makedirs(self.output_pred_dir, exist_ok=True)
 
         # 3. Creating Loss functions
         self.loss_functions = create_loss_func(self.loss_types, self.imbalance_weight)
@@ -95,22 +91,20 @@ class Trainer():
         self.model.load_state_dict(snapshot["model"])
 
     def compute_loss(self, v_dict):
-        if self.model_type == "heatmap":
-            pred_occ = v_dict["output_occupancy_map"]
-            target_occ = v_dict["occupancy_label"]
-            pred = v_dict["output_heatmap"]
-            target = v_dict["heatmap_label"]
-            _, H, W = target.size()
-            
-            if self.smooth_eps:
-                target_occ = target_occ.clamp(self.smooth_eps / 2, 1 - self.smooth_eps / 2)
-                target = target.clamp(self.smooth_eps / 2, 1 - self.smooth_eps / 2)
+        pred = v_dict["output_logits"]
+        target = v_dict["divided_labels"]
+        mask = v_dict["mask"].bool()
 
-            loss = 0
+        if self.smooth_eps:
+            target = target.clamp(self.smooth_eps / 2, 1 - self.smooth_eps / 2)
 
-            for loss_func in self.loss_functions:
-                loss += loss_func(pred_occ, target_occ) / (H*W)
-                loss += loss_func(pred, target) / (H*W)
+        loss = 0
+
+        pred *= mask.unsqueeze(dim=-1)
+        target *= mask.unsqueeze(dim=-1)
+
+        for loss_func in self.loss_functions:
+            loss += loss_func(pred, target)
 
         return loss
     
@@ -144,11 +138,8 @@ class Trainer():
 
         loss = 0
         all_acc1, all_acc3, all_acc5 = [], [], []
-
-        if self.model_type == "heatmap":
-            occ_all_acc1, occ_all_acc3, occ_all_acc5 = [], [], []
-            table = wandb.Table(
-                columns=["Index", "Occupancy Prediction", "Occupancy Ground Truth", "Prediction", "Ground Truth"]
+        table = wandb.Table(
+                columns=["Index", "Prediction", "Ground Truth"]
             )
 
         for i, (vision_dict, lang_dict) in enumerate(train_loader):
@@ -174,40 +165,32 @@ class Trainer():
 
             # 4. Prediction and Save heatmap prediction images
             if i == len(train_loader)-1:
-                save_dir = os.path.join(self.output_heatmap_dir, f"train_epoch_{cur_epoch}/sample_{i}")
+                save_dir = os.path.join(self.output_pred_dir, f"train_epoch_{cur_epoch}/sample_{i}")
                 if not os.path.exists(save_dir):
                     os.makedirs(save_dir, exist_ok=True)
 
-                acc_1, acc_3, acc_5 = accuracy_and_save_img(
+                acc_1, acc_3, acc_5 = accuracy_and_save_points(
                     vision_dict, lang_dict, top_k=[1,3,5],
-                    save_heatmap_img=True, 
+                    save_points=True, 
                     table=table, 
                     local_save_dir=save_dir, 
                     run_type="Train")
             else:
-                acc_1, acc_3, acc_5 = accuracy_and_save_img(
+                acc_1, acc_3, acc_5 = accuracy_and_save_points(
                     vision_dict, lang_dict, top_k=[1,3,5], 
-                    save_heatmap_img=False)
+                    save_points=False)
                 
-            if self.model_type == "heatmap":
-                occ_all_acc1.append(acc_1[0])
-                occ_all_acc3.append(acc_3[0])
-                occ_all_acc5.append(acc_5[0])
-            all_acc1.append(acc_1[-1])
-            all_acc3.append(acc_3[-1])
-            all_acc5.append(acc_5[-1])
+            all_acc1.append(acc_1)
+            all_acc3.append(acc_3)
+            all_acc5.append(acc_5)
 
-        # 6. Compute total loss
+        # 6. Compute total loss and accuracy
         loss /= len(train_loader.dataset)
-
-        occ_all_acc1 = sum(occ_all_acc1) / len(train_loader.dataset)
-        occ_all_acc3 = sum(occ_all_acc3) / len(train_loader.dataset)
-        occ_all_acc5 = sum(occ_all_acc5) / len(train_loader.dataset)
         all_acc1 = sum(all_acc1) / len(train_loader.dataset)
         all_acc3 = sum(all_acc3) / len(train_loader.dataset)
         all_acc5 = sum(all_acc5) / len(train_loader.dataset)
 
-        return loss, [occ_all_acc1, occ_all_acc3, occ_all_acc5], [all_acc1, all_acc3, all_acc5], table
+        return loss, [all_acc1, all_acc3, all_acc5], table
         
     @torch.no_grad()
     def evaluate(self, cur_epoch: int,
@@ -216,11 +199,10 @@ class Trainer():
         self.model.eval()
 
         loss = 0
-        occ_all_acc1, occ_all_acc3, occ_all_acc5 = [], [], []
         all_acc1, all_acc3, all_acc5 = [], [], []
 
         table = wandb.Table(
-            columns=["Index", "Occupancy Prediction", "Occupancy Ground Truth", "Prediction", "Ground Truth"]
+            columns=["Index", "Prediction", "Ground Truth"]
         )
 
         for i, (vision_dict, lang_dict) in enumerate(val_loader):
@@ -230,40 +212,34 @@ class Trainer():
             loss += cur_loss.item()
 
             # 2. Prediction and Save heatmap prediction images
-            save_dir = os.path.join(self.output_heatmap_dir, f"eval_epoch_{cur_epoch}/sample_{i}")
+            save_dir = os.path.join(self.output_pred_dir, f"eval_epoch_{cur_epoch}/sample_{i}")
             if not os.path.exists(save_dir):
                 os.makedirs(save_dir, exist_ok=True)
 
-            acc_1, acc_3, acc_5 = accuracy_and_save_img(vision_dict, lang_dict, 
-                                                        top_k=[1,3,5], 
-                                                        save_heatmap_img=True, 
-                                                        table=table, 
-                                                        local_save_dir=save_dir, 
-                                                        run_type="Val")
-            occ_all_acc1.append(acc_1[0])
-            occ_all_acc3.append(acc_3[0])
-            occ_all_acc5.append(acc_5[0])
-            all_acc1.append(acc_1[1])
-            all_acc3.append(acc_3[1])
-            all_acc5.append(acc_5[1])
+            acc_1, acc_3, acc_5 = accuracy_and_save_points(
+                vision_dict, lang_dict, 
+                top_k=[1,3,5], 
+                save_points=True, 
+                table=table, 
+                local_save_dir=save_dir, 
+                run_type="Val")
+            
+            all_acc1.append(acc_1)
+            all_acc3.append(acc_3)
+            all_acc5.append(acc_5)
 
         # 3. Compute total loss
         loss /= len(val_loader.dataset)
-
-        occ_all_acc1 = sum(occ_all_acc1) / len(val_loader.dataset)
-        occ_all_acc3 = sum(occ_all_acc3) / len(val_loader.dataset)
-        occ_all_acc5 = sum(occ_all_acc5) / len(val_loader.dataset)
         all_acc1 = sum(all_acc1) / len(val_loader.dataset)
         all_acc3 = sum(all_acc3) / len(val_loader.dataset)
         all_acc5 = sum(all_acc5) / len(val_loader.dataset)
 
-        return loss, [occ_all_acc1, occ_all_acc3, occ_all_acc5], [all_acc1, all_acc3, all_acc5], table
+        return loss, [all_acc1, all_acc3, all_acc5], table
     
     def _save_snapshot(self, 
                       cur_epoch: int,
                       losses: list,
-                      accuracies: list,
-                      occ_accuracies: list):
+                      accuracies: list):
         snapshot = {
             'model': self.model.state_dict(),
             'optimizer': self.optimizer.state_dict(),
@@ -272,7 +248,6 @@ class Trainer():
             'epoch': cur_epoch,
             'losses': losses,
             'accuracies': accuracies,
-            'occupancy_accuracies': occ_accuracies
         }
         torch.save(snapshot, os.path.join(self.ckpt_dir, f"checkpoint_{cur_epoch}.pth"))
 
@@ -281,40 +256,32 @@ class Trainer():
                   cur_epoch: int,
                   train_loss,
                   train_accuracies: list,
-                  train_occ_accuracies: list,
                   val_loss,
-                  val_accuracies: list,
-                  val_occ_accuracies: list):
+                  val_accuracies: list,):
         elapsed = time.time() - start_time
 
         log.write(f"Epoch {cur_epoch} : {elapsed/60:.4f} minutes")
 
         log.write(f"Training Loss : {train_loss}")
-        log.write(f"Heatmap Acc@1 : {train_accuracies[0]}, Heatmap Acc@3 : {train_accuracies[1]}, Heatmap Acc@5 : {train_accuracies[2]}")
-        log.write(f"Occupancy Map Acc@1 : {train_occ_accuracies[0]}, Occupancy Map Acc@3 : {train_occ_accuracies[1]}, Occupancy Map Acc@5 : {train_occ_accuracies[2]}")
+        log.write(f"Acc@1 : {train_accuracies[0]}, Acc@3 : {train_accuracies[1]}, Acc@5 : {train_accuracies[2]}")
 
         log.write(f"Validation Loss : {val_loss}")
-        log.write(f"Heatmap Acc@1 : {val_accuracies[0]}, Heatmap Acc@3 : {val_accuracies[1]}, Heatmap Acc@5 : {val_accuracies[2]}")
-        log.write(f"Occupancy Map Acc@1 : {val_occ_accuracies[0]}, Occupancy Map Acc@3 : {val_occ_accuracies[1]}, Occupancy Map Acc@5 : {val_occ_accuracies[2]}")
+        log.write(f"Acc@1 : {val_accuracies[0]}, Acc@3 : {val_accuracies[1]}, Acc@5 : {val_accuracies[2]}")
 
     def _log_wandb(self,
                   cur_epoch: int,
                   train_loss,
                   train_accuracies: list,
-                  train_occ_accuracies: list,
                   train_table: wandb.Table,
                   val_loss,
                   val_accuracies: list,
-                  val_occ_accuracies: list,
                   val_table: wandb.Table,):
         wandb_log = {
             "epoch": cur_epoch,
             "train_loss": train_loss,
-            "train_occ_accuracy": train_occ_accuracies[0],
             "train_accuracy": train_accuracies[0],
             "train_heatmaps": train_table,
             "validation_loss": val_loss,
-            "validation_occ_accuracy": val_occ_accuracies[0],
             "validation_accuracy": val_accuracies[0],
             "validation_heatmaps": val_table
         }
@@ -324,7 +291,6 @@ class Trainer():
                      cur_epoch: int, 
                      losses: list,
                      accuracies: list,
-                     occ_accuracies: list,
                      tables: list,
                      start_time: float,
                      log: Log,
@@ -334,8 +300,7 @@ class Trainer():
         if self.gpu_id == 0:
             self._save_snapshot(cur_epoch=cur_epoch,
                                 losses=losses,
-                                accuracies=accuracies,
-                                occ_accuracies=occ_accuracies)
+                                accuracies=accuracies)
         
             # 2. Save training metrics to log file
             self._write_log(start_time=start_time,
@@ -343,20 +308,16 @@ class Trainer():
                         cur_epoch=cur_epoch,
                         train_loss=losses[0],
                         train_accuracies=accuracies[0],
-                        train_occ_accuracies=occ_accuracies[0],
                         val_loss=losses[1],
-                        val_accuracies=accuracies[1],
-                        val_occ_accuracies=occ_accuracies[0])
+                        val_accuracies=accuracies[1])
             
             # 3. Log metrics to wandb to track the training process
             self._log_wandb(cur_epoch=cur_epoch,
                         train_loss=losses[0],
                         train_accuracies=accuracies[0],
-                        train_occ_accuracies=occ_accuracies[0],
                         train_table=tables[0],
                         val_loss=losses[1],
                         val_accuracies=accuracies[1],
-                        val_occ_accuracies=occ_accuracies[0],
                         val_table=tables[1])
 
 
@@ -376,14 +337,13 @@ class Trainer():
             # 1. Train and Validate the model
             # train_loader.sampler.set_epoch(epoch)
             # val_loader.sampler.set_epoch(epoch)
-            train_loss, train_occ_accuracies, train_accuracies, train_table = self.train(epoch, train_loader, log)
-            val_loss, val_occ_accuracies, val_accuracies, val_table = self.evaluate(epoch, val_loader)
+            train_loss, train_accuracies, train_table = self.train(epoch, train_loader, log)
+            val_loss, val_accuracies, val_table = self.evaluate(epoch, val_loader)
             
             # 2. Save model snapshot and log metrics (to .txt and wandb)
             self.save_and_log(cur_epoch=epoch,
                               losses=[train_loss, val_loss],
                               accuracies=[train_accuracies, val_accuracies],
-                              occ_accuracies=[train_occ_accuracies, val_occ_accuracies],
                               tables=[train_table, val_table],
                               start_time=epoch_start,
                               log=log)

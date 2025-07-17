@@ -8,6 +8,7 @@ import einops
 import numpy as np
 import datetime
 
+import open3d as o3d
 
 def get_device():
     if torch.cuda.is_available():
@@ -30,6 +31,83 @@ def load_config(root, path):
     except (IOError, yaml.YAMLError) as e:
         print(f"Error loading config from {full_path}: {e}")
         return {}
+    
+def accuracy_and_save_points(v_dict: dict, 
+                             l_dict: dict,
+                             top_k: list = [1,3,5],
+                             save_points: bool = False,
+                             table: wandb.Table = None,
+                             local_save_dir: str = None,
+                             run_type: str = None):
+    """
+    
+    """
+    all_acc = [0, 0, 0]
+
+    pred_pcd = v_dict["output_logits"]
+    label_pcd = v_dict["divided_labels"]
+    all_xyz = v_dict["divided_xyz"]
+    centers = v_dict["centers"]
+    scales = v_dict["scales"]
+    all_masks = v_dict["mask"].bool()
+
+    # B, G, num_points = pred_points.size()
+
+    for idx, pred, label, xyz, center, scale, mask in zip(l_dict["index"], pred_pcd, label_pcd, all_xyz, centers, scales, all_masks):
+        # 1. Un-normalize & Mask invalid points (paddings)
+        #  - masked_pred_pcd, masked_label_pcd : (N, 1)
+        xyz = xyz * scale[:,None,None] + center.unsqueeze(dim=1)
+        masked_pred_pcd = pred[mask]
+        masked_label_pcd = label[mask]
+        masked_xyz = xyz[mask]
+
+        # ==== 2. ACCURACY CALCULATION ===========
+        for i, k in enumerate(top_k):
+            # 1. Select top k points of prediction
+            pred_point_indices = torch.topk(masked_pred_pcd, k=k, dim=0).indices
+
+            # 2. Collect corresponding points from the GT heatmap
+            pred_point_on_label = masked_label_pcd[pred_point_indices]
+        
+            # 3. Compute the number of correct correspondences
+            included = torch.any(pred_point_on_label > 0)
+
+            all_acc[i] += included
+
+        # ==== 3. SAVE PREDICTED POINTS ==========
+        if save_points:
+            # 1. Apply sigmoid for proper visualization
+            proba_pred = F.sigmoid(masked_pred_pcd)
+
+            # 2. Concatentate xyz and probabilties
+            rgb_pred = torch.cat([proba_pred] * 3, dim=-1) * 255
+            rgb_label = torch.cat([masked_label_pcd] * 3, dim=-1) * 255
+
+            pcd_pred = torch.cat([masked_xyz, rgb_pred], dim=-1)
+            pcd_label = torch.cat([masked_xyz, rgb_label], dim=-1)
+
+            # 3. Detach tensors and convert to numpy arrays
+            idx = idx.detach().clone().cpu().numpy()
+            pcd_pred = pcd_pred.detach().clone().cpu().numpy()
+            pcd_label = pcd_label.detach().clone().cpu().numpy()
+
+            # 4. Log to wandb
+            pcd_name = f"{run_type}_{idx}"
+            table.add_data(
+                pcd_name,
+                wandb.Object3D(pcd_pred),
+                wandb.Object3D(pcd_label)
+            )
+
+            # 5. Save to PLY format
+            ply_pred = o3d.geometry.PointCloud()
+
+            ply_pred.points = o3d.utility.Vector3dVector(pcd_pred[:,:3])
+            ply_pred.colors = o3d.utility.Vector3dVector(pcd_pred[:,3:] / 255)
+
+            o3d.io.write_point_cloud(os.path.join(local_save_dir, f"{pcd_name}_pred_pcd.ply"), ply_pred, write_ascii=True)
+
+    return all_acc
     
 
 def accuracy_and_save_img(v_dict: dict, 
@@ -94,9 +172,9 @@ def accuracy_and_save_img(v_dict: dict,
             
             # 2. Detach tensors and convert to numpy arrays
             idx = idx.detach().cpu().numpy()
-            pred_occ = pred_occ.detach().cpu().numpy()
+            pred_occ = pred_occ.detach().clone().cpu().numpy()
             label_occ = label_occ.detach().cpu().numpy()
-            pred = pred.detach().cpu().numpy()
+            pred = pred.detach().clone().cpu().numpy()
             label = label.detach().cpu().numpy()
             
             # 3. Rearrange the heatmaps back to their original shape

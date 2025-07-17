@@ -11,3 +11,5 @@ model/Uni3D/path/to/clip_model/*
 *.tar*
 notes/
 data/RoboSpatial
+data/new_anno/out
+scenes

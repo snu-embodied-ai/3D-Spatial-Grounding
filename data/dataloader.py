@@ -10,9 +10,11 @@ ROOT_DIR = os.path.abspath(os.path.join(CUR_DIR, os.pardir))
 sys.path.extend([ROOT_DIR, CUR_DIR])
 
 from data.datasets.datasets import spatial_collate_fn, Spatial3DDataset
+from data.datasets.seg_datasets import SEGSpatial3DDataset
 
 def create_dataloader(data_cfg: dict, 
-                      tokenizer: object):
+                      tokenizer: object,
+                      model_type: str):
     """
     Create Dataloaders.
 
@@ -33,8 +35,14 @@ def create_dataloader(data_cfg: dict,
         data_cfg["train"]["data_dir"] = os.path.join(ROOT_DIR, data_cfg["train"]["data_dir"])
         data_cfg["val"]["data_dir"] = os.path.join(ROOT_DIR, data_cfg["val"]["data_dir"])
 
-        train_dataset = Spatial3DDataset(data_cfg, tokenizer, data_type="train")
-        val_dataset = Spatial3DDataset(data_cfg, tokenizer, data_type="val")
+        if model_type == "heatmap":
+            train_dataset = Spatial3DDataset(data_cfg, tokenizer, data_type="train")
+            val_dataset = Spatial3DDataset(data_cfg, tokenizer, data_type="val")
+            collate_fn = spatial_collate_fn
+        elif model_type == "segmentation":
+            train_dataset = SEGSpatial3DDataset(data_cfg, tokenizer, data_type="train")
+            val_dataset = SEGSpatial3DDataset(data_cfg, tokenizer, data_type="val")
+            collate_fn = None
 
         # train_sampler = DistributedSampler(train_dataset, shuffle=True)
         # val_sampler = DistributedSampler(val_dataset, shuffle=False)
@@ -44,7 +52,7 @@ def create_dataloader(data_cfg: dict,
             batch_size=data_cfg["train"]["batch_size"],
             shuffle=False,
             num_workers=data_cfg["train"]["num_workers"],
-            collate_fn=spatial_collate_fn,
+            collate_fn=collate_fn,
             # sampler=train_sampler,
             pin_memory=data_cfg["train"]["pin_memory"]
         )
@@ -53,14 +61,17 @@ def create_dataloader(data_cfg: dict,
             batch_size=data_cfg["val"]["batch_size"],
             shuffle=False,
             num_workers=data_cfg["val"]["num_workers"],
-            collate_fn=spatial_collate_fn,
+            collate_fn=collate_fn,
             # sampler=val_sampler,
             pin_memory=data_cfg["val"]["pin_memory"]
         )
         
     data_cfg["test"]["data_dir"] = os.path.join(ROOT_DIR, data_cfg["test"]["data_dir"])
 
-    test_dataset = Spatial3DDataset(data_cfg, tokenizer, data_type="test")
+    if model_type == "heatmap":
+        test_dataset = Spatial3DDataset(data_cfg, tokenizer, data_type="test")
+    elif model_type == "segmentation":
+        test_dataset = SEGSpatial3DDataset(data_cfg, tokenizer, data_type="test")
     # test_sampler = DistributedSampler(test_dataset, shuffle=False)
 
     test_data_loader = DataLoader(
@@ -68,7 +79,7 @@ def create_dataloader(data_cfg: dict,
         batch_size=data_cfg["test"]["batch_size"],
         shuffle=False,
         num_workers=data_cfg["test"]["num_workers"],
-        collate_fn=spatial_collate_fn,
+        collate_fn=collate_fn,
         # sampler=test_sampler,
         pin_memory=data_cfg["test"]["pin_memory"]
     )

@@ -167,3 +167,106 @@ class AttUNet(nn.Module):
         # 6. Rearrangement
         heatmap = einops.rearrange(heatmap, 'b 1 h w -> b h w')
         return heatmap
+
+
+class CoordProjector(nn.Module):
+    def __init__(self, unet_cfg: dict,
+                 hidden_dim: int,
+                 num_queries: int):
+        super(CoordProjector, self).__init__()
+
+        self.map_size = unet_cfg["heatmap_shape"]
+        intermediate_dim = unet_cfg["hidden_dim"]
+        num_coords = math.prod(self.map_size)
+
+        self.latent_projector = nn.Linear(len(self.map_size), intermediate_dim)
+
+        self.conv_block = nn.Sequential(
+            nn.Conv1d(
+                in_channels=num_coords,
+                out_channels=num_queries,
+                kernel_size=3,
+                padding=1,
+                stride=1
+            ),
+            nn.GELU()
+        )
+
+        self.query_projector = nn.Linear(intermediate_dim, hidden_dim)
+
+    def forward(self, 
+                heatmap_grid_centers: torch.Tensor):
+        """
+        ## Parameters
+        - `heatmap_grid_centers` : B, H, W, 2
+
+        ## Output
+        - `query` : B, `num_queries`, `hidden_dim`
+        - `latent_to_query` : B, `num_queries`, `intermediate_dim`
+        - `coord_to_latent` : B, H*W, `intermediate_dim`
+        """
+        # heatmap_grid_centers = einops.rearrange(heatmap_grid_centers, 'b h w c -> b c (h w)')
+        coord_to_latent = self.latent_projector(heatmap_grid_centers)
+
+        coord_to_latent = einops.rearrange(coord_to_latent, 'b h w c -> b (h w) c')
+        latent_to_query = self.conv_block(coord_to_latent)
+        query = self.query_projector(latent_to_query)
+
+        return query, latent_to_query, coord_to_latent
+    
+class CoordDecoder(nn.Module):
+    def __init__(self, unet_cfg: dict,
+                 hidden_dim: int,
+                 num_queries: int):
+        super(CoordDecoder, self).__init__()
+
+        self.map_size = unet_cfg["heatmap_shape"]
+        intermediate_dim = unet_cfg["hidden_dim"]
+        num_coords = math.prod(self.map_size)
+
+        self.query_to_latent = nn.Sequential(
+            nn.Linear(hidden_dim, intermediate_dim),
+            nn.GELU(),
+        )
+
+        self.conv_block = nn.Sequential(
+            nn.ConvTranspose1d(
+                in_channels=num_queries,
+                out_channels=num_coords,
+                kernel_size=1,
+                stride=1
+            ),
+            nn.GELU(),
+            nn.Linear(2*intermediate_dim, intermediate_dim)
+        )
+
+        self.heatmap_clf = nn.Linear(2*intermediate_dim, 1)
+
+    def forward(self, 
+                queries: torch.Tensor,
+                latent_to_query: torch.Tensor,
+                coord_to_latent: torch.Tensor):
+        """
+        ## Parameters
+        - `query` : B, `num_queries`, `hidden_dim`
+        - `latent_to_query` : B, `num_queries`, `intermediate_dim`
+        - `coord_to_latent` : B, H*W, `intermediate_dim`
+
+        ## Output
+        - `heatmap_logits` : B, H, W
+        """
+        # B num_queries H -> B num_queries, I
+        query_to_latent = self.query_to_latent(queries)
+        # B num_queries I -> B num_queries 2*I
+        query_to_latent = torch.cat([query_to_latent, latent_to_query], dim=-1)
+
+        # B num_queries 2*I -> B H*W I
+        latent = self.conv_block(query_to_latent)
+        # B H*W I -> B H*W 2*I
+        latent = torch.cat([latent, coord_to_latent], dim=-1)
+
+        # B H*W 2*I -> B H*W 1
+        heatmap = self.heatmap_clf(latent)
+        heatmap = einops.rearrange(heatmap, 'b (h w) 1 -> b h w', h=self.map_size[0], w=self.map_size[1])
+
+        return heatmap

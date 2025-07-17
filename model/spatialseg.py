@@ -1,18 +1,18 @@
 import torch
 import torch.nn as nn
+import einops
 
 import os, sys
 CUR_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.abspath(os.path.join(CUR_DIR, os.pardir))
 sys.path.extend([ROOT_DIR, CUR_DIR])
 
+from .Uni3D.models.point_encoder import RegionPointCloudDecoder
 from .Uni3D.models.uni3d import create_uni3d
 from .modules.transformer import BiDirectionalTransformerDecoder, BiDirectionalTransformerEncoder
-from .modules.map_generator import OccupancyMapGenerator, HeatMapGenerator
-from .modules.att_unet import CoordProjector, CoordDecoder
 
 
-class Spatial3D_lang(nn.Module):
+class Spatial3D_seg(nn.Module):
     def __init__(self, cfg):
         """
         Freeze the pretrained encoders first!
@@ -28,7 +28,7 @@ class Spatial3D_lang(nn.Module):
         # TO DO OTHER EXPERIMENTS EASIER
         # ALSO EASIER TO CHANGE THE ARCHITECTURE (e.g. integrating LLM, introducing other learning framework)
 
-        super(Spatial3D_lang, self).__init__()
+        super(Spatial3D_seg, self).__init__()
 
 
         # 0. Setting Hyperparmeters & Variables
@@ -54,7 +54,8 @@ class Spatial3D_lang(nn.Module):
         # DINO - Query related hyperparameters
         self.num_queries = cfg["DINO"]["Queries"]["num_queries"]
 
-        # Task head - hyperparameters for heatmap generation
+        # Task head
+        self.inter_dim = cfg["uni3d"]["PointcloudEncoder"]["pc_encoder_dim"]
 
         # 1. Load 3D point cloud encoders
         # TODO : Also implement a RGBD version
@@ -104,15 +105,8 @@ class Spatial3D_lang(nn.Module):
         if self.lang_pos_enc_type == "learnable":
             self.lang_pos_embed = nn.Embedding(self.lang_num_tokens, self.transformer_input_dim)
 
-        # 2-3. Queries
-        # self.query_pos = nn.Embedding(self.num_queries, self.transformer_input_dim)
-
-        # 2-4. Coord to Queries
-        self.coord_to_queries = CoordProjector(
-            unet_cfg=cfg["CoordUNet"],
-            hidden_dim=self.transformer_hidden_dim,
-            num_queries=self.num_queries
-        )
+        # # 2-3. Queries
+        # self.query = nn.Embedding(self.num_queries, self.transformer_input_dim)
 
         # 3. Load Bidirectional Transformer Encoder
         self.encoder = BiDirectionalTransformerEncoder(
@@ -125,41 +119,24 @@ class Spatial3D_lang(nn.Module):
             dropout=self.transformer_dropout,
             use_whole_scene=self.use_whole_scene
         )
-        # 4. Load Bidirectional Transformer Decoder
-        self.decoder = BiDirectionalTransformerDecoder(
-            v_dim=self.transformer_input_dim,
-            l_dim=self.transformer_input_dim,
-            embed_dim=self.transformer_hidden_dim,
-            num_heads=self.transformer_num_heads,
-            num_biformers=self.transformer_layer_num,
-            pre_norm=self.transformer_pre_norm,
-            dropout=self.transformer_dropout,
-            use_whole_scene=self.use_whole_scene
-        )
-
-        # 5. Task head for generating occupancy map
-        self.occupany_map_generator = OccupancyMapGenerator(
-            embedding_dim=self.transformer_hidden_dim,
-            nhead=self.transformer_num_heads,
-            activation="gelu",
-            pre_norm=self.transformer_pre_norm,
-            taskhead_cfg=cfg["OccupancyHead"],
-            dropout=self.transformer_dropout)
-
-        # # 5. Task head for mapping the candidate queries to heatmap output
-        # self.heatmap_generator = HeatMapGenerator(
-        #     nhead=1,
-        #     hidden_dim=self.transformer_hidden_dim,
-        #     activation="gelu",
+        # # 4. Load Bidirectional Transformer Decoder
+        # self.decoder = BiDirectionalTransformerDecoder(
+        #     v_dim=self.transformer_input_dim,
+        #     l_dim=self.transformer_input_dim,
+        #     embed_dim=self.transformer_hidden_dim,
+        #     num_heads=self.transformer_num_heads,
+        #     num_biformers=self.transformer_layer_num,
         #     pre_norm=self.transformer_pre_norm,
-        #     taskhead_cfg=cfg["HeatmapHead"],
-        #     dropout=self.transformer_dropout)
-        
-        # 6. Decoder
-        self.queries_to_heatmap = CoordDecoder(
-            unet_cfg=cfg["CoordUNet"],
-            hidden_dim=self.transformer_hidden_dim,
-            num_queries=self.num_queries
+        #     dropout=self.transformer_dropout,
+        #     use_whole_scene=self.use_whole_scene
+        # )
+
+        # 5. Segmentation Head
+        self.seg_clf = RegionPointCloudDecoder(
+            input_dim=self.transformer_hidden_dim,
+            inter_dim=self.inter_dim,
+            points_per_region=cfg["SegmentationHead"]["points_per_region"],
+            num_tokens=self.num_queries
         )
         
 
@@ -226,42 +203,16 @@ class Spatial3D_lang(nn.Module):
         # 4. Pass the encoder
         vision_dict, language_dict = self.encoder(vision_dict, language_dict)
 
-        # 5. Generate Occupancy map
-        occupancy_map = self.occupany_map_generator(vision_dict["heatmap_grid_centers"],
-                                                    vision_dict["region_embedding"],
-                                                    vision_dict["region_position_encoding"])
-        vision_dict["output_occupancy_map"] = occupancy_map
-        # print("OCCUPANCY!!!!\n")
-        # print(occupancy_map[0])
-        # print(occupancy_map.max(), occupancy_map.min())
+        # # 6. Initialize the Queries
+        # B = vision_dict["region_embedding"].size(0)
+        # vision_dict["query_embedding"] = einops.repeat(self.query.weight, 'n d -> b n d', b=B)
+        # vision_dict["query_position_encoding"] = vision_dict["region_position_encoding"]
 
+        # # 6. Pass the decoder
+        # vision_dict, language_dict = self.decoder(vision_dict, language_dict)
 
-        # 6. Initialize the Queries
-        # TODO: Create Query Tokens as much as the output heatmap size. E.g. If the heatmap should be 50*60, then create 300 query tokens which corresponds to one voxel(pixel, region)
-
-        queries, latent_to_query, coord_to_latent = self.coord_to_queries(vision_dict["heatmap_grid_centers"])
-
-        vision_dict["query_embedding"] = queries
-        vision_dict["query_position_encoding"] = None
-
-        # cur_device = vision_dict["centers"].device
-        # B = vision_dict["centers"].size(0)
-        # queries = torch.zeros((B, self.num_queries, self.transformer_hidden_dim)).to(cur_device)
-        # vision_dict["query_embedding"] = queries
-        # vision_dict["query_position_encoding"] = self.query_pos.weight
-
-        # 6. Pass the decoder
-        vision_dict, language_dict = self.decoder(vision_dict, language_dict)
-
-        # 7. Generate Heatmap
-        # heatmap = self.heatmap_generator(vision_dict["heatmap_grid_centers"],
-        #                                  vision_dict["query_embedding"],
-        #                                  vision_dict["query_position_encoding"])
-        heatmap = self.queries_to_heatmap(vision_dict["query_embedding"], latent_to_query, coord_to_latent)
-        vision_dict["output_heatmap"] = heatmap
-        # print("HEATMAP!!!!\n")
-        # print(heatmap[0])
-        # print(heatmap.max(), heatmap.min())
+        # 7. Segmentation (=> Classification)
+        vision_dict = self.seg_clf(vision_dict)
 
         # 8. Return Final Output - The query outputs are logits
         return vision_dict, language_dict

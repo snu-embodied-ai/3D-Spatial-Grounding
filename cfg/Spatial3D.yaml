@@ -1,3 +1,5 @@
+model: "segmentation"                 # segmentation, heatmap
+
 uni3d:
   pc_model: eva02_base_patch14_448
   pretrained_pc: ""
@@ -28,8 +30,8 @@ DINO:
   hidden_dim: 1024
   dim_feedforward: 1024
   num_heads: 8
-  num_biformers: 3
-  dropout: 0.1
+  num_biformers: 6
+  dropout: 0.2
   pre_norm: false
   # use_level_embed: false
   # normalize_pos_enc: true
@@ -42,30 +44,36 @@ DINO:
   use_attention_decoder: True
 
   Queries:
-    num_queries: 128
+    num_queries: 350
 
+SegmentationHead:
+  points_per_region: 512
 
-OccupancyHead:
-  heatmap_gen_method: "basic_unet"          # "self attention", "cross attention", "basic_unet"
-  num_tokens: 350
-  heatmap_shape: [400, 250]
-  kernel_size: [5, 2, 1]
-  strides: [5, 2, 1]
-  conv_channels: [1024, 256, 16, 4]
-  occ_conv_channels: [1024, 256, 16, 4]
-  conv_n_heads: [8, 8, 1]
-  dropout: 0.2
+# CoordUNet:
+#   heatmap_shape: [400, 250]
+#   hidden_dim: 128
 
-HeatmapHead:
-  heatmap_gen_method: "basic_unet"          # "self attention", "cross attention", "basic_unet"
-  num_tokens: 128
-  heatmap_shape: [400, 250]
-  kernel_size: [5, 2, 1]
-  strides: [5, 2, 1]
-  conv_channels: [1024, 128, 2, 1]
-  occ_conv_channels: [1024, 128, 2, 1]
-  conv_n_heads: [8, 8, 1]
-  dropout: 0.2
+# OccupancyHead:
+#   heatmap_gen_method: "basic_unet"          # "self attention", "cross attention", "basic_unet"
+#   num_tokens: 350
+#   heatmap_shape: [400, 250]
+#   kernel_size: [5, 2, 1]
+#   strides: [5, 2, 1]
+#   conv_channels: [1024, 256, 16, 4]
+#   occ_conv_channels: [1024, 256, 16, 4]
+#   conv_n_heads: [8, 8, 1]
+#   dropout: 0.2
+
+# HeatmapHead:
+#   heatmap_gen_method: "basic_unet"          # "self attention", "cross attention", "basic_unet"
+#   num_tokens: 128
+#   heatmap_shape: [400, 250]
+#   kernel_size: [5, 2, 1]
+#   strides: [5, 2, 1]
+#   conv_channels: [1024, 128, 2, 1]
+#   occ_conv_channels: [1024, 128, 2, 1]
+#   conv_n_heads: [8, 8, 1]
+#   dropout: 0.2
 
 use_whole_scene: False
 distributed: False

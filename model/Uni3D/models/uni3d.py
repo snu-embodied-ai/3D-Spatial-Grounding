@@ -18,10 +18,12 @@ class Uni3D(nn.Module):
         return self.point_encoder(vision_dict)
 
     def forward(self, vision_dict):
-        cls_feat, region_feat = self.encode_pc(vision_dict)
+        cls_feat, region_feat, inter_feat2, inter_feat1 = self.encode_pc(vision_dict)
         
         vision_dict["cls_embedding"] = cls_feat
         vision_dict["region_embedding"] = region_feat
+
+        vision_dict["intermediate_features"] = [inter_feat2, inter_feat1]
 
         return vision_dict
 

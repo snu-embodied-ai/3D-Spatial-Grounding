@@ -11,9 +11,11 @@ sys.path.extend([ROOT_DIR, CUR_DIR])
 
 from data.dataloader import create_dataloader
 from utils.trainer import Trainer
+from utils.trainer_seg import Trainer as TrainerSeg
 from utils.util import *
 
 from model.noLLM import Spatial3D_lang
+from model.spatialseg import Spatial3D_seg
 from model.text_encoder.CLIP_text_encoder import load_text_encoder
 
 """
@@ -36,18 +38,23 @@ def main(args):
     config, model_config, data_config = [
         load_config(ROOT_DIR, path) for path in [args.config, args.model_config, args.data_config]
     ]
+    model_type = model_config["model"]
 
     # ======= 3. Initialize wandb and open log file ===============================
     init_wandb(config, model_config, data_config)
 
     if not os.path.exists(config["output_dir"]):
-        os.mkdir(config["output_dir"])
-        os.mkdir(os.path.join(config["output_dir"], "log"))
+        os.makedirs(config["output_dir"], exist_ok=True)
+        os.makedirs(os.path.join(config["output_dir"], "log"), exist_ok=True)
     log = Log(config["output_dir"])
 
-    # ======= 4. Initialize the model ======================================
-    log.write("Creating Spatial3DLang Model..!!")
-    model = Spatial3D_lang(model_config)
+    # ======= 4. Initialize model ======================================
+    log.write("Creating Spatial3D Model..!!")
+    if model_type == "heatmap":
+        model = Spatial3D_lang(model_config)
+    elif model_type == "segmentation":
+        model = Spatial3D_seg(model_config)
+
     text_encoder = load_text_encoder(model_config)
 
     if config["freeze_pretrain"]:
@@ -58,19 +65,27 @@ def main(args):
 
     # ======= 5. Create Dataloaders ======================================
     if data_config["only_test"]:
-        _, _, test_Dataloader = create_dataloader(data_config, tokenizer)
+        _, _, test_Dataloader = create_dataloader(data_config, tokenizer, model_type)
     else:
-        train_Dataloader, val_Dataloader, test_Dataloader = create_dataloader(data_config, tokenizer)
+        train_Dataloader, val_Dataloader, test_Dataloader = create_dataloader(data_config, tokenizer, model_type)
 
     
     # ======= 6. Train OR Inference ======================================
     if args.run_type == "train":
-        trainer = Trainer(model=model,
-                          text_encoder=text_encoder,
-                          train_cfg=config,
-                          model_cfg=model_config,
-                        #   device=device,
-                          )
+        if model_type == "heatmap":
+            trainer = Trainer(model=model,
+                            text_encoder=text_encoder,
+                            train_cfg=config,
+                            model_cfg=model_config,
+                            #   device=device,
+                            )
+        elif model_type == "segmentation":
+            trainer = TrainerSeg(
+                model=model,
+                text_encoder=text_encoder,
+                train_cfg=config,
+                model_cfg=model_config,
+            )
         trainer.fit(train_Dataloader, val_Dataloader, log)
     elif args.run_type == "inference":
         pass

@@ -49,33 +49,32 @@ class BiDirectionalTransformerEncoder(nn.Module):
         else:
             vis_embed = v_dict["region_embedding"]
             vis_pos = v_dict["region_position_encoding"]
+        vis_mask = v_dict["mask"].mean(dim=-1) != 0
 
         lang_embed = l_dict["input_ids"]
-        lang_padding_mask = l_dict["padding_mask"]
-        lang_mask = l_dict["attention_mask"]
+        lang_padding_mask = l_dict["padding_mask"].bool()
+        lang_mask = l_dict["attention_mask"].bool()
         lang_pos = l_dict["text_position_encoding"]
         
         for i in range(self.num_biformers):
             # 1. Vision self attention
-            # No mask applied to vision embedding since point cloud tokens are all valid tokens
             vis_embed = self.self_attentions[i](query=vis_embed,
                                                 query_pos=vis_pos,
                                                 attn_masks=None,
-                                                key_padding_mask=None)
+                                                key_padding_mask=~vis_mask)
             
             # 2. Text self attention
             lang_embed = self.word_self_attentions[i](
                 query=lang_embed,
                 query_pos=lang_pos,
-                attn_masks=lang_mask.bool(),
-                key_padding_mask=lang_padding_mask.bool()
+                attn_masks=~lang_mask,
+                key_padding_mask=~lang_padding_mask
             )
             
             # 3. Vision-to-Text attetion & Text-to-Vision attention (concurrent operation)
-            # Only masking the padding tokens of the language embeding, not masking the vision tokens
             vis_embed, lang_embed = self.bi_attentions[i](vis_embed, lang_embed,
-                                                        attention_mask_v=None, 
-                                                        attention_mask_l=~lang_padding_mask.bool()) # 0 allow 
+                                                        attention_mask_v=~vis_mask, 
+                                                        attention_mask_l=~lang_padding_mask) # 0 allow 
             
         l_dict["input_ids"] = lang_embed
 
@@ -137,17 +136,17 @@ class BiDirectionalTransformerDecoder(nn.Module):
     def forward(self, v_dict, l_dict):
         queries = v_dict["query_embedding"]
         query_pos = v_dict["query_position_encoding"]
+        query_mask = v_dict["mask"].mean(dim=-1) != 0
 
         if self.use_whole_scene:
             pass
         else:
             vis_embed = v_dict["region_embedding"]
             vis_pos = v_dict["region_position_encoding"]
+            vis_mask = v_dict["mask"].mean(dim=-1) != 0
 
         lang_embed = l_dict["input_ids"]
-        lang_padding_mask = l_dict["padding_mask"]
-        lang_mask = l_dict["attention_mask"]
-        lang_pos = l_dict["text_position_encoding"]
+        lang_padding_mask = l_dict["padding_mask"].bool()
         
         for i in range(self.num_biformers):
             # 1. Query self attention (Query = Candidates)
@@ -155,13 +154,13 @@ class BiDirectionalTransformerDecoder(nn.Module):
             queries = self.self_attentions[i](query=queries,
                                               query_pos=query_pos,
                                               attn_masks=None,
-                                              key_padding_mask=None)
+                                              key_padding_mask=~query_mask)
             
             # 2. Query-to-Region(vision) cross attention
             queries = self.cross_attentions[i](tgt=queries,
                                                memory=vis_embed,
                                                memory_mask=None,
-                                               memory_key_padding_mask=None,
+                                               memory_key_padding_mask=~vis_mask,
                                                pos=vis_pos,
                                                query_pos=query_pos)
             
@@ -176,7 +175,7 @@ class BiDirectionalTransformerDecoder(nn.Module):
             # 4. Query-to-Text attetion & Text-to-Query attention (concurrent operation)
             # Only masking the padding tokens of the language embeding, not masking the query tokens
             queries, _ = self.bi_attentions[i](queries, lang_embed,
-                                               attention_mask_v=None, attention_mask_l=~lang_padding_mask.bool()) # 0 allow 
+                                               attention_mask_v=~query_mask, attention_mask_l=~lang_padding_mask) # 0 allow 
             
         # l_dict["text_embedding"] = lang_embed
         v_dict["query_embedding"] = queries
