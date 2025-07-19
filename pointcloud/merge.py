@@ -1,17 +1,20 @@
 import open3d as o3d
 import numpy as np
 from PIL import Image
+import argparse
 import os
 
-SAVE_DIR = "./data"
+NUM_SCENES = 1000
+POSE_DIR = "./pose"
+RGBD_DIR = "./rgbd"
 OUTPUT_DIR = "./global_clouds"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 FOCAL_LENGTH = 50
 HORIZONTAL_APERTURE = 36
-VERTICAL_APERTURE = 24
-IMAGE_W = 640
-IMAGE_H = 480
+VERTICAL_APERTURE = 27
+IMAGE_W = 1280
+IMAGE_H = 960
 
 def rotate_around_x(theta_deg: float):
     theta = np.deg2rad(theta_deg)
@@ -25,10 +28,10 @@ def rotate_around_x(theta_deg: float):
         [0,   0,    0, 1]
     ])
 
-def create_pointcloud(camera_num: int):
-    depth = np.load(f"{SAVE_DIR}/depth_frame_{camera_num}.npy")
-    rgb = np.array(Image.open(f"{SAVE_DIR}/rgb_frame_{camera_num}.png"))[:, :, :3]
-    pose = np.load(f"{SAVE_DIR}/pose_{camera_num}.npy")
+def create_pointcloud(scene: int, camera_num: int):
+    depth = np.load(f"{RGBD_DIR}/depth_frame_{scene}_{camera_num}.npy")
+    rgb = np.array(Image.open(f"{RGBD_DIR}/rgb_frame_{scene}_{camera_num}.png"))[:, :, :3]
+    pose = np.load(f"{POSE_DIR}/pose_{camera_num}.npy")
 
     fx = (FOCAL_LENGTH / HORIZONTAL_APERTURE) * IMAGE_W
     fy = (FOCAL_LENGTH / VERTICAL_APERTURE) * IMAGE_H
@@ -60,48 +63,26 @@ def create_pointcloud(camera_num: int):
     pcd.transform(rotate_around_x(180))
     pcd.transform(pose)
 
-    o3d.io.write_point_cloud(f"{OUTPUT_DIR}/pcd_{camera_num}.ply", pcd)
+    return pcd
 
-    axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.2)
-    axis.transform(pose)
+def main(begin, end):
+    for scene in range(begin, end):
 
-    return pcd, axis
+        cams = [0, 1, 2]
+        merged_pcd = o3d.geometry.PointCloud()
 
-def create_grid(size=4.0, divisions=20):
-    lines = []
-    points = []
+        for c in cams:
+            pcd = create_pointcloud(scene, c)
+            merged_pcd += pcd
 
-    step = size / divisions
-    half = size / 2.0
-
-    for i in range(divisions + 1):
-        x = -half + i * step
-        points.append([x, -half, 0])
-        points.append([x, half, 0])
-        lines.append([2 * i, 2 * i + 1])
-
-        y = -half + i * step
-        points.append([-half, y, 0])
-        points.append([half, y, 0])
-        lines.append([2 * (divisions + 1) + 2 * i, 2 * (divisions + 1) + 2 * i + 1])
-
-    grid = o3d.geometry.LineSet()
-    grid.points = o3d.utility.Vector3dVector(points)
-    grid.lines = o3d.utility.Vector2iVector(lines)
-    return grid
-
-def main():
-    cams = [0, 1, 2]
-    all_pcds = []
-    all_axes = []
-
-    for c in cams:
-        pcd, axis = create_pointcloud(c)
-        all_pcds.append(pcd)
-        all_axes.append(axis)
-
-    grid = create_grid(size=4.0, divisions=20)
-    o3d.visualization.draw_geometries(all_pcds + all_axes + [grid])
+        o3d.io.write_point_cloud(f"{OUTPUT_DIR}/pcd_{scene}.ply", pcd)
+        print(f"[main()] Scene {scene} done")
+    # for debug
+    o3d.visualization.draw_geometries([merged_pcd])
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--begin", type=int, default=1)
+    parser.add_argument("--end", type=int, default=1000)
+    args = parser.parse_args()
+    main(args.begin, args.end)
