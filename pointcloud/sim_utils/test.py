@@ -3,7 +3,7 @@ from isaacsim import SimulationApp
 # === Start simulation app ===
 simulation_app = SimulationApp({"headless": False})
 
-from asset import AssetCatalog
+from sim_utils.assets.asset import AssetCatalog
 from sampler import PositionSampler
 from camera import CameraManager, CAMERA_POSITIONS
 from pathlib import Path

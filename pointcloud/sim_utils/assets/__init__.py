@@ -1,0 +1,3 @@
+from .asset import AssetCatalog
+from .asset_list import (ASSET_NAMES, ASSET_NAME_TO_PATH, ASSET_NAME_TO_SPAWN_HEIGHT, LOCAL_ASSET_ROOT_PATH,
+                         ISAAC_ASSET_NAMES, LOCAL_ASSET_NAMES, MUG_ASSET_NAMES, BLOCK_ASSET_NAMES)

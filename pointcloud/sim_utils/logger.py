@@ -22,6 +22,7 @@ NAME_FOR_LOG = {
 class SceneLogger:
     def __init__(self, file_path):
         self.file_path = file_path
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
         if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
             with open(file_path, "w") as f:
                 f.write("scene_index,name,x,y\n")
