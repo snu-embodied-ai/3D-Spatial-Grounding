@@ -2,7 +2,7 @@ import numpy as np
 import random
 from .spawner import Spawner
 from sim_utils.assets.asset import AssetCatalog
-from sim_utils.samplers import PositionSampler
+from sim_utils.samplers import PositionRandomSampler
 from pxr import Sdf
 from isaacsim.core.utils.prims import delete_prim
 from isaacsim.core.utils.stage import add_reference_to_stage
@@ -13,7 +13,7 @@ STANDUP_ORIENTATION = [np.cos(np.deg2rad(45)), -np.sin(np.deg2rad(45)), 0, 0]
 
 
 class UniqueSpawner(Spawner):
-    def __init__(self, catalog: AssetCatalog, sampler: PositionSampler, num_of_objects):
+    def __init__(self, catalog: AssetCatalog, sampler: PositionRandomSampler, num_of_objects):
         super().__init__(catalog, sampler, num_of_objects)
     
     def spawn_random(self):

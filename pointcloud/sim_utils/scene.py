@@ -27,7 +27,7 @@ def generate_light(prim_path="/World/DistantLight"):
 def generate_table(
         prim_path="/World/Table",
         positions=np.array([[0.0, 0.0, 0.05]]),
-        scales=np.array([[1.0, 1.0, 0.1]]),
+        scales=np.array([[1.2, 0.8, 0.1]]),
     ):
     create_prim(prim_path=prim_path, prim_type="Cube", attributes={"size": 1.0})
 

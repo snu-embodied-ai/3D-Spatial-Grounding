@@ -9,7 +9,7 @@ def parse_args():
     parser.add_argument("--log_path", type=str, default="./pointcloud/log")
     parser.add_argument("--asset_list", type=str, default="",
                         help="Select among full, isaac, local, mug and block")
-    parser.add_argument("--sampler", type=str, default="position",
+    parser.add_argument("--sampler", type=str, default="random",
                         help="Select among random and aligned")
     parser.add_argument("--spawner", type=str, default="unique",
                         help="Select among unique and duplicate")
@@ -102,7 +102,7 @@ def get_asset_catalog(args):
 
 def get_sampler(args):
     from sim_utils import samplers
-    sampler_name = args.sampler.capitalize() + "Sampler"
+    sampler_name = "Position" + args.sampler.capitalize() + "Sampler"
     return getattr(samplers, sampler_name)()
 
 def get_spawner(args, catalog, sampler):

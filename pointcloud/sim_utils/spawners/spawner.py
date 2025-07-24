@@ -1,10 +1,10 @@
 from abc import ABC, abstractmethod
 from sim_utils.assets.asset import AssetCatalog
-from sim_utils.samplers import PositionSampler
+from sim_utils.samplers import PositionRandomSampler
 
 
 class Spawner(ABC):
-    def __init__(self, catalog: AssetCatalog, sampler: PositionSampler, num_of_objects):
+    def __init__(self, catalog: AssetCatalog, sampler: PositionRandomSampler, num_of_objects):
         self.catalog = catalog
         self.sampler = sampler
         self.spawned_object_paths = []

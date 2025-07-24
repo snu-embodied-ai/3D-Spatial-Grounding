@@ -1,1 +1,1 @@
-from .sampler import PositionSampler
+from .random_sampler import PositionRandomSampler
