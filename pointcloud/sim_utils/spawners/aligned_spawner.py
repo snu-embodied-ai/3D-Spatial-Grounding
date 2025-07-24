@@ -10,16 +10,30 @@ from isaacsim.core.prims import XFormPrim
 
 
 STANDUP_ORIENTATION = [np.cos(np.deg2rad(45)), -np.sin(np.deg2rad(45)), 0, 0]
+TARGET_OBJECT_NAME = "banana"
 
 
-class UniqueSpawner(Spawner):
+class AlignedSpawner(Spawner):
     def __init__(self, catalog: AssetCatalog, sampler: PositionRandomSampler, num_of_objects):
         super().__init__(catalog, sampler, num_of_objects)
+        self.target_object_name = TARGET_OBJECT_NAME
     
     def spawn_random(self):
         names = self.catalog.random_names(self.num_of_objects)
         positions = self.sampler.sample(self.num_of_objects)
+        self._transform_to_aligned_names(names, positions)
         self.spawn(names, positions)
+    
+    def _transform_to_aligned_names(self, names, positions, threshold=0.07):
+        aligned_target_line = positions[0][1]
+        num_targets = 0
+        for position in positions:
+            if abs(position[1] - aligned_target_line) < threshold:
+                num_targets += 1
+            else:
+                break
+
+        names[:num_targets] = [self.target_object_name] * num_targets
 
     def spawn(self, names, positions):
         self.clear_objects()

@@ -5,9 +5,9 @@ import argparse
 import os
 
 
-POSE_DIR = "./block_unique/pose"
-RGBD_DIR = "./block_unique/rgbd"
-OUTPUT_DIR = "./block_unique/global_clouds"
+POSE_DIR = "./results/scissors_unique_aligned/pose"
+RGBD_DIR = "./results/scissors_unique_aligned/rgbd"
+OUTPUT_DIR = "./results/scissors_unique_aligned/global_clouds"
 
 
 FOCAL_LENGTH = 50
