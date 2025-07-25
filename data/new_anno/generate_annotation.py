@@ -11,6 +11,7 @@ import numpy as np
 from omegaconf import OmegaConf
 
 from dataloader.dataloader import PointCloudDataLoader
+from dataloader.isaacsim_dataloader import CustomTabletopDataLoader
 from dataloader.objects import pcObject
 from detect_freespace_smooth import *
 from spatial_relations.relationships import UNARY, PAIRWISE
@@ -110,10 +111,11 @@ def generate_annotation_surface(surface: pcObject,
                                 surface_descriptions: defaultdict[list],
                                 surface_threshold: float,
                                 binary_threshold_scale: float,
-                                verbose: bool):
-    
+                                verbose: bool,
+                                is_custom: bool = False):
+
     for obj in surface.children:
-        obj.check_label_validity()
+        obj.check_label_validity(is_custom)
         
     # 1. Define all free space above the surface
     all_free_space = define_freespace(surface)
@@ -125,7 +127,7 @@ def generate_annotation_surface(surface: pcObject,
         
     all_unary_descriptions = []
     for i, (obj_label, objects) in enumerate(divided_objects.items()):
-        unary_free_space = np.zeros_like(all_free_space)
+        unary_free_space = np.zeros_like(all_free_space, dtype=bool)
         unary_free_space_scores = np.zeros_like(all_free_space, dtype=float)
 
         for obj in objects:
@@ -149,6 +151,9 @@ def generate_annotation_surface(surface: pcObject,
         
     surface_descriptions["unary"].extend(all_unary_descriptions)
 
+    # ======================================================================
+    # TODO: Should handle the problem of duplicates in BINARY RELATIONS, too!!!
+    # ======================================================================
     valid_objects = list(chain.from_iterable(divided_objects.values()))
             
     if len(valid_objects) > 1:
@@ -189,35 +194,40 @@ def generate_annotations(all_objects: dict,
                          floor_threshold: float,
                          surface_threshold: float,
                          binary_threshold_scale: float,
-                         verbose: bool = True):
+                         verbose: bool = True,
+                         is_custom: bool = False):
 
     # ====== FLOOR DESCRIPTION GENERATION ==============================
-    floor_objs = all_objects["floor"]
+    floor_objs = all_objects.get("floor")
     floor_descriptions = defaultdict(list)
 
-    for floor in floor_objs:
-        if verbose:
-            print("FLOOR label: ", floor.label)
+    if floor_objs is not None:
+        for floor in floor_objs:
+            if verbose:
+                print("FLOOR label: ", floor.label)
 
-        floor_descriptions = generate_annotation_surface(surface=floor,
-                                                         surface_descriptions=floor_descriptions,
-                                                         surface_threshold=floor_threshold,
-                                                         binary_threshold_scale=binary_threshold_scale,
-                                                         verbose=verbose)
+            floor_descriptions = generate_annotation_surface(surface=floor,
+                                                            surface_descriptions=floor_descriptions,
+                                                            surface_threshold=floor_threshold,
+                                                            binary_threshold_scale=binary_threshold_scale,
+                                                            verbose=verbose,
+                                                            is_custom=is_custom)
 
     # ====== SURFACE DESCRIPTION GENERATION ==============================
-    surface_objs = all_objects["supporting"]
+    surface_objs = all_objects.get("supporting")
     surface_descriptions = defaultdict(list)
 
-    for surface in surface_objs:
-        if verbose:
-            print("SURFACE label: ", surface.label)
-        
-        surface_descriptions = generate_annotation_surface(surface=surface,
-                                                           surface_descriptions=surface_descriptions,
-                                                           surface_threshold=surface_threshold,
-                                                           binary_threshold_scale=binary_threshold_scale,
-                                                           verbose=verbose)
+    if surface_objs is not None:
+        for surface in surface_objs:
+            if verbose:
+                print("SURFACE label: ", surface.label)
+            
+            surface_descriptions = generate_annotation_surface(surface=surface,
+                                                            surface_descriptions=surface_descriptions,
+                                                            surface_threshold=surface_threshold,
+                                                            binary_threshold_scale=binary_threshold_scale,
+                                                            verbose=verbose,
+                                                            is_custom=is_custom)
 
     return {
         "floor" : floor_descriptions,
@@ -244,61 +254,77 @@ def run(config: OmegaConf,
     
     if config.verbose:
         print("Start running annotation process...")
+    
+    # 1. Create output directory
+    os.makedirs(config.output_dir, exist_ok=True)
 
-    all_annotations = {}
+    # all_annotations = {}
 
     for dataset_name in config.Datasets:
-        dataloader = PointCloudDataLoader(config=config,
+        if dataset_name == "IsaacSimTabletop":
+            dataloader = CustomTabletopDataLoader(config=config)
+            is_custom = True
+        else:
+            dataloader = PointCloudDataLoader(config=config,
                                           dataset_name=dataset_name)
+            is_custom = False
         
         scene_dict = dataloader.get_objects_for_all_scene()
         scene_annos = dict()
 
-        # Prepare configs as a simple dict (for pickling)
-        config_dict = {
-            'floor_threshold': config.floor_threshold,
-            'surface_threshold': config.surface_threshold,
-            'binary_threshold_scale': config.binary_threshold_scale
-        }
+        # # Prepare configs as a simple dict (for pickling)
+        # config_dict = {
+        #     'floor_threshold': config.floor_threshold,
+        #     'surface_threshold': config.surface_threshold,
+        #     'binary_threshold_scale': config.binary_threshold_scale
+        # }
 
-        # Pack args for multiprocessing
-        scene_args = [
-            (scene_name, scene_objects, config_dict)
-            for scene_name, scene_objects in scene_dict.items()
-        ]
+        # # Pack args for multiprocessing
+        # scene_args = [
+        #     (scene_name, scene_objects, config_dict)
+        #     for scene_name, scene_objects in scene_dict.items()
+        # ]
 
-        # Use ProcessPoolExecutor for parallel execution
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = [executor.submit(process_scene, args) for args in scene_args]
-            for future in as_completed(futures):
-                scene_name, result = future.result()
-                scene_annos[scene_name] = result
+        # # Use ProcessPoolExecutor for parallel execution
+        # with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        #     futures = [executor.submit(process_scene, args) for args in scene_args]
+        #     for future in as_completed(futures):
+        #         scene_name, result = future.result()
+        #         scene_annos[scene_name] = result
 
-        # for scene_name, scene_objects in scene_dict.items():
-        #     if config.verbose:
-        #         print(f"Processing scene {scene_name} of dataset {dataset_name}")
-        #     scene_annos[scene_name] = generate_annotations(scene_objects,
-        #                                                    floor_threshold=config.floor_threshold,
-        #                                                    surface_threshold=config.surface_threshold,
-        #                                                    binary_threshold_scale=config.binary_threshold_scale,
-        #                                                    verbose=config.verbose)
+        for scene_name, scene_objects in scene_dict.items():
+            if config.verbose:
+                print(f"Processing scene {scene_name} of dataset {dataset_name}")
+            scene_annos[scene_name] = generate_annotations(scene_objects,
+                                                           floor_threshold=config.floor_threshold,
+                                                           surface_threshold=config.surface_threshold,
+                                                           binary_threshold_scale=config.binary_threshold_scale,
+                                                           verbose=config.verbose,
+                                                           is_custom=is_custom)
+            
+            if config.dry_run:
+                break
         
         if config.verbose:
             print(f"Done processing {dataset_name}...\n")
-        all_annotations[dataset_name] = scene_annos
+        # all_annotations[dataset_name] = scene_annos
 
+        # Write the bytes to a file
+        
         if config.dry_run:
-            break
+            anno_file_name = f"{dataset_name}_annotation_dry.pkl"
+        else:
+            anno_file_name = f"{dataset_name}_annotation.pkl"
+        anno_file_path = os.path.join(config.output_dir, anno_file_name)
 
-    # Write the bytes to a file
-    os.makedirs(config.output_dir, exist_ok=True)
-    anno_file_path = os.path.join(config.output_dir, "output_annotation.pkl")
+        if config.verbose:
+            print(f"Saving annotations of {dataset_name} to {anno_file_path}...")
+
+        with open(anno_file_path, "wb") as f:
+            pickle.dump(scene_annos, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     if config.verbose:
-        print(f"Saving annotations to {anno_file_path}...")
-
-    with open(anno_file_path, "wb") as f:
-        pickle.dump(all_annotations, f, protocol=pickle.HIGHEST_PROTOCOL)
+        print("  ALL ANNOTATIONS DONE!!  ")
 
 
 if __name__ == "__main__":
