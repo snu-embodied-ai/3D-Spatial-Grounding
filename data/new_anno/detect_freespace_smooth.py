@@ -1,5 +1,7 @@
 import numpy as np
-from shapely.geometry import Polygon, Point
+from shapely.geometry import Polygon
+import shapely
+from matplotlib.path import Path as matPath
 
 from dataloader.objects import pcObject
 from spatial_relations.blocking import filter_outlier
@@ -14,7 +16,7 @@ def get_object_pairs(all_objects: list[pcObject],
 
     hull_polygons = [Polygon(obj.points[:,:2]).convex_hull for obj in all_objects]
 
-    wall_exists = False
+    wall_exists = len(walls) > 0
 
     if wall_exists:
         walls_xy = [wall.points[:,:2] for wall in walls]
@@ -32,16 +34,12 @@ def get_object_pairs(all_objects: list[pcObject],
             if feasible_gap <= dist <= binary_threshold:
                 if wall_exists:
                     obj_j_xy = all_objects[j].points[:,:2]
-                    sampled_pts = sample_points(obj_j_xy, num_samples=5)
 
-                    # Use numpy vectorization for blocking check
-                    # blocked_mask = np.array([
-                    #     check_object_blocked_by_wall_vectorized(pt, obj_i_xy, walls_xy, threshold=0.01)
-                    #     for pt in sampled_pts
-                    # ])
-                    # if not blocked_mask.any():
-                    #     dist_mat[i, j] = dist
-                    #     dist_mat[j, i] = dist  # Symmetric
+                    blocked_mask = filter_outlier(obj_j_xy, obj_i_xy, walls_xy, threshold=0.01)
+
+                    if not blocked_mask.any():
+                        dist_mat[i, j] = dist
+                        dist_mat[j, i] = dist  # Symmetric
                 else:
                     dist_mat[i, j] = dist
                     dist_mat[j, i] = dist  # Symmetric
@@ -95,11 +93,13 @@ def define_freespace(surface: pcObject) -> np.ndarray[bool]:
             hull_polygon = Polygon(obj.points[:,:2]).convex_hull
 
             # 2. Find surface points outside the object's hull
-            free_mask = np.array([not hull_polygon.contains(Point(pt)) for pt in surface_xy])           # shape : (N,)
+            path = matPath(np.array(hull_polygon.exterior.coords))
+            free_mask = ~path.contains_points(surface_xy)
+
+            # free_mask = np.array([not hull_polygon.contains(Point(pt)) for pt in surface_xy])           # shape : (N,)
             
             # 3. Update free space
             free_space = np.logical_and(free_space, free_mask)
-            print(obj.label, free_space.sum(), free_mask.sum())
 
     return free_space.astype(bool)
 
@@ -135,7 +135,7 @@ def freespace_near_single(obj: pcObject,
             Ground truth free space with smooth labels. The closer, more feasible points will have higher scores and farther and least feasbile points will have lower scores. Shape `(num_surface_points,)`
     """
 
-    wall_exists = False
+    wall_exists = len(walls) > 0
 
     obj_xy = obj.points[:,:2]
     surface_xy = surface.points[:,:2]
@@ -148,7 +148,8 @@ def freespace_near_single(obj: pcObject,
 
     # ==== 2. COMPUTING DISTANCES ========================
     # Compute distance from each surface point to the hull boundary
-    dists = np.array([hull_polygon.exterior.distance(Point(pt)) for pt in surface_xy])          # shape : (N,)
+    # dists = np.array([hull_polygon.exterior.distance(Point(pt)) for pt in surface_xy])          # shape : (N,)
+    dists = shapely.distance(shapely.points(surface_xy), hull_polygon.exterior)
 
     # ==== 3. Select free points within the threshold distance from the hull ================
     within_threshold = dists <= threshold
@@ -160,18 +161,17 @@ def freespace_near_single(obj: pcObject,
         # ==== 4. Select free points that aren't blocked by the walls ========
         # e.g. object -- | wall | -- free point
         free_points = surface_xy[free_mask_within_threshold]
-        outlier_filtered_mask = filter_outlier(free_points, obj_xy, walls_xy, threshold)
+        outlier_filtered_mask = filter_outlier(free_points, obj_xy, walls_xy)
 
-        final_mask = np.zeros_like(free_mask_within_threshold)
-        final_mask[free_mask_within_threshold] = outlier_filtered_mask
+        final_mask = np.zeros_like(free_mask_within_threshold, dtype=bool)
+        final_mask[free_mask_within_threshold] = ~outlier_filtered_mask
 
         final_mask = final_mask.astype(bool)
 
     # ==== 5. Apply Gaussian smoothing to the labels =======
     mu = threshold * gaussian_mean_point
     free_space_scores = apply_gaussian_smoothing(mean=mu,
-                                                 # 99.7% of the mass within threshold
-                                                 std=(threshold - mu) / 3.0,
+                                                 std=(threshold - mu) / 9.0,
                                                  # Distances for points in valid region
                                                  valid_dists=dists[final_mask],
                                                  final_mask=final_mask)
@@ -216,9 +216,13 @@ def freespace_near_pair(obj1: pcObject,
     surface_xy = surface.points[:,:2]
 
     # 2. Compute distance from each surface point to the hull boundary
-    dists_1 = np.array([hull_polygon_1.exterior.distance(Point(pt)) for pt in surface_xy])          # shape : (N,)
-    dists_2 = np.array([hull_polygon_2.exterior.distance(Point(pt)) for pt in surface_xy])          # shape : (N,)
-    min_dists = np.minimum(dists_1, dists_2)
+    # dists_1 = np.array([hull_polygon_1.exterior.distance(Point(pt)) for pt in surface_xy])          # shape : (N,)
+    dists_1 = shapely.distance(shapely.points(surface_xy), hull_polygon_1.exterior)
+    # dists_2 = np.array([hull_polygon_2.exterior.distance(Point(pt)) for pt in surface_xy])          # shape : (N,)
+    dists_2 = shapely.distance(shapely.points(surface_xy), hull_polygon_2.exterior)
+
+    centroid = (obj1_xy.mean(axis=0) + obj2_xy.mean(axis=0)) / 2
+    dist_from_centroid = np.linalg.norm(surface_xy - centroid, axis=1)
 
     # 3. Select free points within the threshold distance from the hull
     within_threshold = np.logical_and(dists_1 <= pair_dist, dists_2 <= pair_dist)
@@ -226,11 +230,10 @@ def freespace_near_pair(obj1: pcObject,
 
     # 4. Apply Gaussian smoothing to the labels 
     # Centering the mean at midpoint between objects
-    mu = pair_dist / 2.0
-    free_space_scores = apply_gaussian_smoothing(mean=mu,
-                                                 # 99.7% of the mass within threshold
-                                                 std=mu / 3.0,
-                                                 valid_dists=min_dists[free_mask_within_threshold],
+    max_dist_from_centroid = dist_from_centroid.max()
+    free_space_scores = apply_gaussian_smoothing(mean=0,
+                                                 std=max_dist_from_centroid / 27.0,
+                                                 valid_dists=dist_from_centroid[free_mask_within_threshold],
                                                  final_mask=free_mask_within_threshold)
     
 

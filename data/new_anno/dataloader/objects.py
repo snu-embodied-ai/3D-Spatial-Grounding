@@ -5,7 +5,7 @@ import numpy as np
 from spellchecker import SpellChecker
 import webcolors
 
-from utils import get_color_name, check_spell
+from utils import find_closest_css_color, check_spell
 
 class pcObject:
     def __init__(self):
@@ -19,6 +19,8 @@ class pcObject:
         self._obj_type = None
         self._parent = None
         self._children = []
+
+        self._center = None
 
     @property
     def label(self):
@@ -56,15 +58,11 @@ class pcObject:
     
     @color.setter
     def color(self, new_rgb: np.ndarray):
-        css_colors = webcolors.names('css3')
-        count = np.zeros(len(css_colors))
-        for rgb in new_rgb:
-            color = get_color_name(rgb)
-            count[css_colors.index(color)] += 1
+        names = find_closest_css_color(new_rgb)
+        
+        unique_names, counts = np.unique(names, return_counts=True)
 
-        dominant_color_id = count.argmax()
-
-        self._color_string = css_colors[dominant_color_id]
+        self._color_string = unique_names[counts.argmax()]
 
     
     @property
@@ -121,39 +119,57 @@ class pcObject:
     
 
     
-    def check_label_validity(self):
-        exclude_cats = ["wall", "void", "unknown", "unlabeled", "person"]
-        misc_cats = ["unk", "objects", "other", "remove", "delete"]
+    def check_label_validity(self, is_custom: bool = False):
+        if is_custom:
+            non_alphabet = re.findall(r'[^a-zA-Z ]', self.label)
 
-        final_label = None
+            if len(non_alphabet) > 0:
+                self._final_label = self.label.replace(non_alphabet[0], " ")
+            else:       # Table object
+                self._final_label = f"{self._color_string} {self.label}"
+            return self._final_label
+        else:
+            exclude_cats = ["wall", "void", "unknown", "unlabeled", "person"]
+            misc_cats = ["unk", "objects", "other", "remove", "delete"]
 
-        # 1. Check if the object major category is valid
-        if any(cat in exclude_cats for cat in self.major_category):
-            return False
+            final_label = None
 
-        # 2. Check if the raw label includes words that are miscellaneous
-        for exclude in misc_cats:
-            if exclude in self.label:
+            # 1. Check if the object major category is valid
+            if any(cat in exclude_cats for cat in self.major_category):
                 return False
 
-        # 3. Check if the raw label includes non-string elements
-        has_non_alpha = bool(re.search(r'[^a-zA-Z ]', self.label))
+            # 2. Check if the raw label includes words that are miscellaneous
+            for exclude in misc_cats:
+                if exclude in self.label:
+                    return False
 
-        if has_non_alpha:
-            final_label = self.major_category[1]
-        else:
-            final_label = self.label
+            # 3. Check if the raw label includes non-string elements
+            has_non_alpha = bool(re.search(r'[^a-zA-Z ]', self.label))
 
-        # 4. SPELL CHECK - fix typos
-        # final_label = check_spell(final_label)
+            if has_non_alpha:
+                final_label = self.major_category[1]
+            else:
+                final_label = self.label
 
-        # 5. Add color information in front of the object label
-        if self._color_string is not None:
-            final_label = f"{self._color_string} {final_label}"
+            # 4. SPELL CHECK - fix typos
+            # final_label = check_spell(final_label)
 
-        self._final_label = final_label
-        return final_label
+            # 5. Add color information in front of the object label
+            if self._color_string is not None:
+                final_label = f"{self._color_string} {final_label}"
+
+            self._final_label = final_label
+            return final_label
     
     @property
     def final_label(self):
         return self._final_label
+    
+    @property
+    def center(self):
+        return self._center
+    
+    @center.setter
+    def center(self, center: tuple[int]):
+        self._center = center
+        return self._center

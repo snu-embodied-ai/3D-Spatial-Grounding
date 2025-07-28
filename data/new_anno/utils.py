@@ -40,26 +40,27 @@ def check_spell(word):
     
     return final_str
 
-def closest_color(requested_color):
-    min_colors = {}
-    for name in webcolors.names(spec="css3"):
-        r_c, g_c, b_c = webcolors.name_to_rgb(name)
-        rd = (r_c - requested_color[0]) ** 2
-        gd = (g_c - requested_color[1]) ** 2
-        bd = (b_c - requested_color[2]) ** 2
-        min_colors[(rd + gd + bd)] = name
-    return min_colors[min(min_colors.keys())]
+def find_closest_css_color(rgb_array: np.ndarray):
+    """
+    Find the closest css colors for each point
 
-def get_color_name(rgb_tuple):
-    rgb_tuple *= 255
-    try:
-        # Convert RGB to hex
-        hex_value = webcolors.rgb_to_hex(rgb_tuple)
-        # Get the color name directly
-        return webcolors.hex_to_name(hex_value, spec='css3')
-    except ValueError:
-        # If exact match not found, find the closest color
-        return closest_color(rgb_tuple)
+    Returns
+    ---
+        names_per_point: list
+            CSS3 color strings for every points
+    """
+
+    css3_names = webcolors.names(spec='css3')
+    css3_rgb = np.array([webcolors.name_to_rgb(name) for name in css3_names])
+
+    rgb_array *= 255
+    
+    # rgb_array: (N, 3), css3_rgb: (M, 3)
+    diffs = rgb_array[:, None, :] - css3_rgb[None, :, :]  # (N, M, 3)
+    dists = np.linalg.norm(diffs, axis=2)  # (N, M)
+    idxs = np.argmin(dists, axis=1)  # (N,)
+
+    return [css3_names[i] for i in idxs]
     
 
 def find_duplicates(all_objects: list):
@@ -79,7 +80,7 @@ def find_duplicates(all_objects: list):
     walls = []
 
     for obj in all_objects:
-        if "wall" in obj.major_category:
+        if obj.major_category is not None and "wall" in obj.major_category:
             walls.append(obj)
         elif obj.final_label is not None:
             division[obj.final_label].append(obj)
@@ -107,9 +108,9 @@ def apply_gaussian_smoothing(mean: float,
     scores = np.exp(-((valid_dists - mean) ** 2) / (2 * std ** 2))
     
     # Min-max scaling
-    min_score = scores.min()
-    max_score = scores.max()
-    scores = (scores - min_score) / (max_score - min_score)
+    # min_score = scores.min()
+    # max_score = scores.max()
+    # scores = (scores - min_score) / (max_score - min_score)
 
     final_output[final_mask] = scores
 

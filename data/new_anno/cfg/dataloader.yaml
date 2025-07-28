@@ -1,5 +1,5 @@
 root_dir: /media/jslee/219db482-9799-4615-841a-d8f46e93e50c/home/kykwon/SpatialUnderstanding/data/RoboSpatial/data
-output_dir: /media/jslee/219db482-9799-4615-841a-d8f46e93e50c/home/kykwon/SpatialUnderstanding/data/new_anno/out
+output_dir: /media/jslee/219db482-9799-4615-841a-d8f46e93e50c/home/kykwon/SpatialUnderstanding/data/new_anno/out_all
 verbose: True
 dry_run: True
 
@@ -10,24 +10,24 @@ supporter_objects:
 
 floor_threshold: 0.5
 surface_threshold: 0.25
-binary_threshold_scale: 1.8
+binary_threshold_scale: 1.2
 
 Datasets:
 
-  # Matterport3D:
-  #   base_dir: ${root_dir}/matterport3d
-  #   after_scene_name: "region_segmentations"
-  #   ply_name: .ply
-  #   semantics_file_name: .semseg.json
-  #   segments_file_name: .vsegs.json
-  #   category_mapping_file: category_mapping.tsv
+  Matterport3D:
+    base_dir: ${root_dir}/matterport3d
+    after_scene_name: "region_segmentations"
+    ply_name: .ply
+    semantics_file_name: .semseg.json
+    segments_file_name: .vsegs.json
+    category_mapping_file: category_mapping.tsv
 
   Scannet:
     base_dir: ${root_dir}/scannet/scans
     after_scene_name: ""
-    ply_name: _vh_clean.ply
+    ply_name: _vh_clean_2.ply
     semantics_file_name: _vh_clean.aggregation.json
-    segments_file_name: _vh_clean.segs.json
+    segments_file_name: vh_clean_2.0.010000.segs.json
     category_mapping_file: scannetv2-labels.combined.tsv
 
 
@@ -38,3 +38,11 @@ Datasets:
   #   semantics_file_name: semseg.v2.json
   #   segments_file_name: .0.010000.segs.v2.json
   #   category_mapping_file: 3rscan_mapping.csv
+
+  IsaacSimTabletop:
+    base_dir: ${root_dir}/../../isaacsimtabletop
+    scene_dir: scenes
+    ply_name: .ply
+    log_file: log
+    table_height: 0.1
+    eps: 0.001
