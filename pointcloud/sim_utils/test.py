@@ -5,7 +5,7 @@ simulation_app = SimulationApp({"headless": False})
 
 from sim_utils.assets.asset import AssetCatalog
 from sampler import PositionSampler
-from camera import CameraManager, CAMERA_POSITIONS
+from sim_utils.cameras.camera import CameraManager, CAMERA_POSITIONS
 from pathlib import Path
 
 from isaacsim.storage.native import get_assets_root_path

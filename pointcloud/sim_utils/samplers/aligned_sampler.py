@@ -1,12 +1,14 @@
 import numpy as np
 import random
+from . import register
 from .sampler import PositionSampler
 
 
 SPAWN_POSITIONS = [[[x, y, 0.0] for y in np.arange(-0.25, 0.35, 0.25)] for x in np.arange(-0.45, 0.55, 0.225)]
-NUM_ALIGNED_LINES = 2
+NUM_ALIGNED_LINES = 3
 
 
+@register("aligned")
 class PositionAlignedSampler(PositionSampler):
     def __init__(self, grid=SPAWN_POSITIONS):
         self.grid = grid

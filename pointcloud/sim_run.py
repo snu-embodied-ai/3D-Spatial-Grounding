@@ -14,6 +14,7 @@ def parse_args():
     parser.add_argument("--spawner", type=str, default="unique",
                         help="Select among unique and duplicate")
     parser.add_argument("--num_objects", type=int, default=4)
+    parser.add_argument("--target_object", type=str, default="banana")
     return parser.parse_args()
 
 def start_simulation(args):
@@ -26,9 +27,11 @@ def start_simulation(args):
 def do_simulation(args, simulation_app):
     import os
     from isaacsim.core.api import World
-    from sim_utils.camera import CameraManager
-    from sim_utils.logger import SceneLogger
-    from sim_utils.scene import Table, generate_ground_plane, generate_light, generate_table
+    from sim_utils.samplers import create as create_sampler
+    from sim_utils.spawners import create as create_spawner
+    from sim_utils.cameras import CameraManager
+    from sim_utils.loggers import SceneLogger
+    from sim_utils.scenes import generate_ground_plane, generate_light, generate_table
 
     # Save Directory
     rgbd_dir = args.rgbd_dir
@@ -38,13 +41,16 @@ def do_simulation(args, simulation_app):
     # Basic Scene
     generate_ground_plane()
     generate_light()
-    generate_table()
-    table = Table()
+    table = generate_table()
 
     # Asset, Sampler, Builer, Camera Manager
-    catalog = get_asset_catalog(args)
-    sampler = get_sampler(args)
-    spawner = get_spawner(args, catalog, sampler)
+    catalog = create_asset_catalog(args.asset_list)
+    sampler = create_sampler(args.sampler)
+    spawner = create_spawner(args.spawner,
+                             catalog=catalog,
+                             sampler=sampler,
+                             num_objects=args.num_objects,
+                             target_object=args.target_object)
     cam_manager = CameraManager()
     logger = SceneLogger(log_path)
 
@@ -84,31 +90,13 @@ def do_simulation(args, simulation_app):
     print("[Main] Simulation terminated")
     simulation_app.close()
 
-def get_asset_list(args):
-    from sim_utils import assets
-    asset_list_name = args.asset_list.strip().upper()
-    if asset_list_name == "FULL":
-        asset_list = "ASSET_NAMES"
-    else:
-        asset_list = f"{asset_list_name}_ASSET_NAMES"
-    return getattr(assets, asset_list)
-
-def get_asset_catalog(args):
+def create_asset_catalog(asset_list):
     from isaacsim.storage.native import get_assets_root_path
-    from sim_utils.assets import AssetCatalog, LOCAL_ASSET_ROOT_PATH
-    asset_list = get_asset_list(args)
-    catalog = AssetCatalog(get_assets_root_path(), LOCAL_ASSET_ROOT_PATH, asset_list)
+    from sim_utils.assets.asset import AssetCatalog
+    from sim_utils.assets import create as create_asset_list
+    asset_list = create_asset_list(asset_list)
+    catalog = AssetCatalog(get_assets_root_path(), asset_list=asset_list)
     return catalog
-
-def get_sampler(args):
-    from sim_utils import samplers
-    sampler_name = "Position" + args.sampler.capitalize() + "Sampler"
-    return getattr(samplers, sampler_name)()
-
-def get_spawner(args, catalog, sampler):
-    from sim_utils import spawners
-    spawner_name = args.spawner.capitalize() + "Spawner"
-    return getattr(spawners, spawner_name)(catalog, sampler, args.num_objects)
 
 def main():
     args = parse_args()

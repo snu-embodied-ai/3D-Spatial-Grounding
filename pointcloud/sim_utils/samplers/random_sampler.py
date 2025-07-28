@@ -1,11 +1,13 @@
 import numpy as np
 import random
+from . import register
 from .sampler import PositionSampler
 
 
 SPAWN_POSITIONS = [[[x, y, 0.0] for y in np.arange(-0.25, 0.35, 0.1)] for x in np.arange(-0.45, 0.55, 0.1)]
 
 
+@register("random")
 class PositionRandomSampler(PositionSampler):
     def __init__(self, grid=SPAWN_POSITIONS):
         self.grid = grid

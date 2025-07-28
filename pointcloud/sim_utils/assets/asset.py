@@ -5,6 +5,9 @@ from typing import Dict
 from .asset_list import ASSET_NAMES, ASSET_NAME_TO_PATH, ASSET_NAME_TO_SPAWN_HEIGHT
 
 
+LOCAL_ASSET_ROOT_PATH = "/home/choij/isaac-sim/pointcloud/assets"
+
+
 @dataclass
 class Asset:
     name: str
@@ -13,7 +16,7 @@ class Asset:
 
 
 class AssetCatalog:
-    def __init__(self, isaac_root, local_root, asset_list=ASSET_NAMES):
+    def __init__(self, isaac_root, local_root=LOCAL_ASSET_ROOT_PATH, asset_list=ASSET_NAMES):
         self.assets: Dict[str, Asset] = {}
         self.isaac_root = isaac_root
         self.local_root = local_root

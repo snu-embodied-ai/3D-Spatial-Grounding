@@ -1,4 +1,4 @@
-LOCAL_ASSET_ROOT_PATH = "/home/choij/isaac-sim/pointcloud/assets"
+from . import register
 
 ASSET_NAMES = [
     "chef_can_u",
@@ -276,3 +276,9 @@ ASSET_NAME_TO_SPAWN_HEIGHT = {
     "watergun_u": 0.11,
     "wooden_bowl": 0.1,
 }
+
+register("full")(ASSET_NAMES)
+register("isaac")(ISAAC_ASSET_NAMES)
+register("local")(LOCAL_ASSET_NAMES)
+register("mug")(MUG_ASSET_NAMES)
+register("block")(BLOCK_ASSET_NAMES)
