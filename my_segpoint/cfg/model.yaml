@@ -1,0 +1,75 @@
+GEM:
+  num_layers: 3
+  deform_radius: 5.0
+  KPConv:
+    in_channels: [3, 64, 128]
+    out_channels: [64, 128, 256]
+    other:
+      radius: 0.03
+      sigma: 1.2
+      num_kernel_points: 15
+      in_points_dim: 3
+      fixed_kernel_points: center
+      KP_influence: linear
+      aggregation_mode: sum
+      use_batchnorm: True
+      bn_momentum: 0.02
+
+
+Point_encoder:
+  Uni3D:
+    load_pretrained_uni3d: True
+    freeze: True
+    pc_model: eva02_base_patch14_448
+    pretrained_pc: ""
+    ckpt_path: model/Uni3D/path/to/checkpoints/model.pt
+    drop_path_rate: 0.20
+
+    PointcloudEncoder:
+      token_unit: region
+      pc_feat_dim: 768
+      embed_dim: 1024
+      group_size: 64
+      num_group: 512          # Too many..?? MODIFICATION needed
+      pc_encoder_dim: 512
+      patch_dropout: 0.0
+  
+  CA_Uni3D:
+    num_heads: 8
+    dropout_rate: 0.5
+    gem_dim: 256
+    align_clip_dim: False
+    num_CA_layers: 4
+
+
+GFP:
+  selected_intermed_idx: [2, 3, 4]
+  num_intermed_feats: [8192, 2048, 512]
+  gem_dim: 256
+  pc_feat_dim: 768
+  num_neighbors: 5
+  num_heads: 8
+  dropout_rate: 0.5
+  LLM_hidden_dim: 4096
+
+
+LLM:
+  model_name: meta-llama/Llama-2-7b-chat-hf
+  new_model_name: SegPoint_Llama2-7b-chat
+  device_map: auto              # "auto" for multi-GPU and GPU
+  truncation_side: right
+  padding_side: right
+  LoRA:
+    train_with: True
+    new_model_name: SegPoint_Llama2-7b-chat
+    rank: 16
+    alpha: 16
+    target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+    dropout: 0.0
+
+SEG_projector:
+  sizes: [4096, 4096, 256]
+
+
+
+distributed: False
