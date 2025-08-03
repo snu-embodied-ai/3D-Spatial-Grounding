@@ -1,0 +1,119 @@
+# Maybe this format will fit better
+SemanticSegmentation:
+  ScanNet200:
+    root_dir:
+    ply_name:
+    semantics_file_name:
+    segments_file_name:
+    category_mapping_file_name:
+
+  S3DIS:
+    root_dir:
+    ply_name:
+    semantics_file_name:
+    segments_file_name:
+    category_mapping_file_name:
+
+
+ReferringSegmentation:
+  ScanRefer:
+    root_dir:
+    ply_name:
+    semantics_file_name:
+    segments_file_name:
+    category_mapping_file_name:
+
+  Sr3D:
+    root_dir:
+    ply_name:
+    semantics_file_name:
+    segments_file_name:
+    category_mapping_file_name:
+
+  Nr3D:
+    root_dir:
+    ply_name:
+    semantics_file_name:
+    segments_file_name:
+    category_mapping_file_name:
+
+  Multi3DRefer:
+    root_dir:
+    ply_name:
+    semantics_file_name:
+    segments_file_name:
+    category_mapping_file_name:
+
+
+InstructionSegmentation:
+  Instruct3D:
+    root_dir:
+    ply_name:
+    semantics_file_name:
+    segments_file_name:
+    category_mapping_file_name:
+
+# ==================================================
+
+
+# ScanNet200:
+#   type: Semantic_segmentation
+#   root_dir:
+#   ply_name:
+#   semantics_file_name:
+#   segments_file_name:
+#   category_mapping_file_name:
+
+
+# S3DIS:
+#   type: Semantic_segmentation
+#   root_dir:
+#   ply_name:
+#   semantics_file_name:
+#   segments_file_name:
+#   category_mapping_file_name:
+
+
+# ScanRefer:
+#   type: Referring_segmentation
+#   root_dir:
+#   ply_name:
+#   semantics_file_name:
+#   segments_file_name:
+#   category_mapping_file_name:
+
+
+# ReferIt3D:
+#   Sr3D:
+#     type: Referring_segmentation
+#     root_dir:
+#     ply_name:
+#     semantics_file_name:
+#     segments_file_name:
+#     category_mapping_file_name:
+  
+#   Nr3D:
+#     type: Referring_segmentation
+#     root_dir:
+#     ply_name:
+#     semantics_file_name:
+#     segments_file_name:
+#     category_mapping_file_name:
+
+
+# Multi3DRefer:
+#   type: Referring_segmentation
+#   root_dir:
+#   ply_name:
+#   semantics_file_name:
+#   segments_file_name:
+#   category_mapping_file_name:
+
+
+# Instruct3D:
+#   type: Instruction_segmentation
+#   # root_dir:
+#   # ply_name:
+#   # semantics_file_name:
+#   # segments_file_name:
+#   # category_mapping_file_name:

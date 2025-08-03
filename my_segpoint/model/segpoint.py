@@ -51,6 +51,9 @@ class SegPoint(nn.Module):
         self.pcd_encoder = CA_Uni3D(pretrained_uni3d=pretrained_encoder,
                                     cfg=cfg.Point_encoder.CA_Uni3D)
 
+        # 2-1. PCD projector
+        self.pcd_proj = nn.Linear(cfg.Point_encoder.PointcloudEncoder.pc_encoder_dim, self.LLM.config.hidden_size)
+
         # 3. Load Geometric Enhancer Module
         self.GEM = GeometricEnhancer(cfg.GEM)
 
@@ -59,7 +62,14 @@ class SegPoint(nn.Module):
 
         # 5. <SEG> token projector
         self.seg_projector = nn.Sequential(
-            nn.Linear(self.LLM.hidden_size, self.LLM.hidden_size),
+            nn.Linear(self.LLM.config.hidden_size, self.LLM.config.hidden_size),
             nn.GELU(),
-            nn.Linear(self.LLM.hidden_size, cfg.GFP.gem_dim)
+            nn.Linear(self.LLM.config.hidden_size, cfg.GFP.gem_dim)
         )
+
+    def generate_input_embs(self):
+        pass
+    
+    def forward(self,
+                data_dict: dict):
+        pass

@@ -1,0 +1,17 @@
+system_prompts:
+  name: "base"
+  text: You are an AI visual assistant that can analyze 3D scenes, receiving point clouds of the scene. You should properly respond to the USER's instruction according to the given visual information. The conversation centers around an indoor scene.
+
+Semantic_segmentation:
+  specific:
+    USER: <POINT> Can you segment the {category} category in this point cloud?
+    ASSISTANT: "{category} <SEG>."
+  all_categories:
+    USER: <POINT> Can you segment all the semantic masks in this point cloud and output separate masks for each category in the alphabetical order of the categories?
+    ASSISTANT: "{category} <SEG>, {category} <SEG>, ..."
+
+Referring_segmentation:
+  specific:
+    USER: <POINT> Can you segment the object {description} in this point cloud?
+    ASSISTANT: "{category} <SEG>."
+
