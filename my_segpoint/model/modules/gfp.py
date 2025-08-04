@@ -6,7 +6,7 @@ import einops
 
 from pointnet2_ops.pointnet2_modules import PointnetFPModule
 from pointnet2_ops.pointnet2_utils import furthest_point_sample, gather_operation
-from utils.point_utils import fps, knn_point, index_points
+from modules.utils.point_utils import fps, knn_point, index_points
 
 class GeometricFeaturePropagation(nn.Module):
     def __init__(self,

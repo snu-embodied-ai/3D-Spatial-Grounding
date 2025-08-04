@@ -15,6 +15,7 @@ import open3d as o3d
 from plyfile import PlyData
 
 from data.utils import load_json
+from data.dataset_consts import TASKS, TASK_TYPE, SCENE_IDS
 
 class SegPointDatasetBase(Dataset):
 
@@ -187,17 +188,20 @@ class SemanticSegmentationDataset(SegPointDatasetBase):
                               dataset_name: str,
                               scene_id: str):
         mask = -np.ones(segIndices, dtype=int)
+        categories = set()
 
         for obj in objects_in_scene:
             cat_2_int = self.cat_2_int(dataset_name=dataset_name,
                                        obj_label=obj["label"])
+            categories.add(cat_2_int)
+
             obj_point_idx = np.isin(segIndices, obj["segments"])
             mask[obj_point_idx] = cat_2_int
 
         if np.any(np.isin(mask, -1)):
             raise Exception(f"{scene_id} in dataset {dataset_name} has unlabeled points")
         
-        return mask
+        return categories, mask
 
 
             
@@ -226,10 +230,10 @@ class SemanticSegmentationDataset(SegPointDatasetBase):
             # Create category mask
             mask = np.isin(segIndices, segments)
         elif self.seg_type == "all_category":
-            mask = self.generate_all_cat_mask(segIndices=segIndices,
-                                              objects_in_scene=objects_in_scene,
-                                              dataset_name=dataset_name,
-                                              scene_id=scene_id)
+            all_cats, mask = self.generate_all_cat_mask(segIndices,
+                                                        objects_in_scene,
+                                                        dataset_name,
+                                                        scene_id)
         else:
             raise Exception("Other semantic segmentation besides specific category and all category are not implemented")
 
@@ -241,18 +245,20 @@ class SemanticSegmentationDataset(SegPointDatasetBase):
         features = np.concatenate([xyz, color], axis=-1)
 
         # 3. Generate Data Dictionary
+        # Store the indices instead of storing the raw string for converting torch tensors
         data_dict = {
-            "scene_id": scene_id,
+            "scene_id": SCENE_IDS[dataset_name].index(scene_id),      # Is this needed?
             "xyz": xyz,
             "features": features,
-            "task": "SemanticSegmentation",
-            "task_type": self.seg_type,
+            "task": TASKS.index("SemanticSegmentation"),
+            "task_type": TASK_TYPE.index(self.seg_type),
             "mask": mask
         }
         if self.seg_type == "specific":
             data_dict["category"] = random_category
         elif self.seg_type == "all_category":
-            data_dict["category"] = "all"
+            data_dict["category"] = all_cats
+            data_dict["num_category"] = len(all_cats)
 
         return data_dict
 

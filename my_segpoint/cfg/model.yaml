@@ -59,6 +59,10 @@ LLM:
   device_map: auto              # "auto" for multi-GPU and GPU
   truncation_side: right
   padding_side: right
+
+  special_tokens:
+    seg_token: <SEG>
+
   LoRA:
     train_with: True
     new_model_name: SegPoint_Llama2-7b-chat
