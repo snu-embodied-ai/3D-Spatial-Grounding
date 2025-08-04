@@ -1,5 +1,7 @@
 import glob
 import os
+import random
+from collections import defaultdict
 from pathlib import Path
 from omegaconf import OmegaConf, DictConfig
 
@@ -10,6 +12,7 @@ import numpy as np
 import pandas as pd
 import pickle
 import open3d as o3d
+from plyfile import PlyData
 
 from data.utils import load_json
 
@@ -146,12 +149,61 @@ class SemanticSegmentationDataset(SegPointDatasetBase):
                                            sep="\t" if category_mapping_file.endswith('.tsv') else ",")
             self.category_mapping_files[dataset_name] = category_mapping
 
+    def cat_2_int(self,
+                  dataset_name: str,
+                  obj_label: str):
+        cat_mapping = self.category_mapping_files[dataset_name]
+        cat_row = cat_mapping.loc[cat_mapping["raw_category"] == obj_label]
+        if not cat_row.empty:
+            cat_2_int = int(cat_row.iloc[0]["id"])
+        else:
+            raise ValueError(f"Category '{obj_label}' not found in category mapping for dataset '{dataset_name}'.")
+        
+        return cat_2_int
+
+
+    def select_random_category(self,
+                               objects_in_scene: list[dict],
+                               dataset_name: str):
+        """
+        Changing into a dictionary with label(key)-segments(value) pair, then selecting a random category
+        """
+        category_dict = defaultdict(list)
+
+        for obj in objects_in_scene:
+            cat_2_int = self.cat_2_int(dataset_name=dataset_name,
+                           obj_label=obj["label"])
+            
+            category_dict[cat_2_int].extend(obj["segments"])
+
+        random_cat = random.choice(list(category_dict.keys()))
+        segments = category_dict[random_cat]
+
+        return random_cat, segments
+
+    def generate_all_cat_mask(self,
+                              segIndices: list,
+                              objects_in_scene: list,
+                              dataset_name: str,
+                              scene_id: str):
+        mask = -np.ones(segIndices, dtype=int)
+
+        for obj in objects_in_scene:
+            cat_2_int = self.cat_2_int(dataset_name=dataset_name,
+                                       obj_label=obj["label"])
+            obj_point_idx = np.isin(segIndices, obj["segments"])
+            mask[obj_point_idx] = cat_2_int
+
+        if np.any(np.isin(mask, -1)):
+            raise Exception(f"{scene_id} in dataset {dataset_name} has unlabeled points")
+        
+        return mask
+
+
             
     def __getitem__(self, index):
         # return super().__getitem__(index)
         # Dictionary with keys - 'scene_id', 'xyz', 'features', 'task', 'task_type', 'mask(labels)', 'category' (for specific), (+ @)
-        data_dict = dict()
-
         dataset_name, scene_id = self.all_samples[index]
 
         # 1. Get dataset config to get file paths & Get info files
@@ -164,9 +216,22 @@ class SemanticSegmentationDataset(SegPointDatasetBase):
 
         seg_data = load_json(seg_path)
         semseg_data = load_json(semseg_path)
-
-        # Select category (not object, since multiple objects can exist in a scene)
+        segIndices = seg_data["segIndices"]
         objects_in_scene = semseg_data["segGroups"]
+
+        if self.seg_type == "specific":
+            # Select category (not object, since multiple objects can exist in a scene)
+            random_category, segments = self.select_random_category(objects_in_scene, dataset_name)
+
+            # Create category mask
+            mask = np.isin(segIndices, segments)
+        elif self.seg_type == "all_category":
+            mask = self.generate_all_cat_mask(segIndices=segIndices,
+                                              objects_in_scene=objects_in_scene,
+                                              dataset_name=dataset_name,
+                                              scene_id=scene_id)
+        else:
+            raise Exception("Other semantic segmentation besides specific category and all category are not implemented")
 
         # 2. Get pointcloud
         ply_path = root_dir / scene_id / dataset_paths.ply_name
@@ -175,13 +240,21 @@ class SemanticSegmentationDataset(SegPointDatasetBase):
         color = np.asarray(pcd.colors)
         features = np.concatenate([xyz, color], axis=-1)
 
-        
+        # 3. Generate Data Dictionary
+        data_dict = {
+            "scene_id": scene_id,
+            "xyz": xyz,
+            "features": features,
+            "task": "SemanticSegmentation",
+            "task_type": self.seg_type,
+            "mask": mask
+        }
+        if self.seg_type == "specific":
+            data_dict["category"] = random_category
+        elif self.seg_type == "all_category":
+            data_dict["category"] = "all"
 
-        
-
-
-
-        pass
+        return data_dict
 
     def __len__(self):
         return len(self.all_samples)

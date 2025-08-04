@@ -1,6 +1,7 @@
 system_prompts:
   name: "base"
   text: You are an AI visual assistant that can analyze 3D scenes, receiving point clouds of the scene. You should properly respond to the USER's instruction according to the given visual information. The conversation centers around an indoor scene.
+  add_sys_delimiters: True
 
 Semantic_segmentation:
   specific:

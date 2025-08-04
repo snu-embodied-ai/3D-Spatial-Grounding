@@ -14,8 +14,10 @@ from modules.gfp import GeometricFeaturePropagation
 from modules.gem import GeometricEnhancer
 
 class SegPoint(nn.Module):
-    def __init__(self, cfg: DictConfig):
+    def __init__(self, cfg: DictConfig,
+                 instruct_cfg: DictConfig):
         super().__init__()
+        self.prompts = instruct_cfg
 
         # 1. Load Llama2
         self.LLM_name = cfg.LLM.model_name
@@ -67,8 +69,14 @@ class SegPoint(nn.Module):
             nn.Linear(self.LLM.config.hidden_size, cfg.GFP.gem_dim)
         )
 
-    def generate_input_embs(self):
-        pass
+    def generate_input_embs(self,
+                            data_dict: dict):
+        """
+        Concatenate prompts and visual embeddings and special tokens
+        System Prompts + USER prompts (with point embedding) + ASSISTANT prompts (expected output)
+        """
+        batch_size = len(data_dict["scene_id"])
+        
     
     def forward(self,
                 data_dict: dict):
