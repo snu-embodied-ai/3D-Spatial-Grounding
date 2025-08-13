@@ -1,0 +1,27 @@
+rng_seed: 42
+
+model_config_path: cfg/model/model.yaml
+dataset_config_path: cfg/data/dataset.yaml
+instructions_config_path: cfg/data/instruction.yaml
+
+tasks: ["SemanticSegmentation"]
+# datasets: ["ScanNet200"]
+task_type: ["specific", "all_categories"]
+
+mode: train
+
+train:
+  batch_size:
+  num_workers:
+  pin_memory: True
+  epochs: 100
+
+val:
+  batch_size:
+  num_workers:
+  pin_memory: True
+
+test:
+  batch_size:
+  num_workers:
+  pin_memory: True

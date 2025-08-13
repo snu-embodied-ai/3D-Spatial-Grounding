@@ -10,6 +10,10 @@ TASK_TYPE = [
 ]
 
 SCENE_IDS = {
+    "ScanNet": [
+
+    ],
+
     "ScanNet200": [
 
     ],
@@ -38,3 +42,5 @@ SCENE_IDS = {
         
     ]
 }
+
+DATASETS = list(SCENE_IDS.keys())

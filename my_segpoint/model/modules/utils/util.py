@@ -2,8 +2,18 @@ import torch
 
 import contextlib
 
+"""
+Following functions are copied from LEO
 
-# https://github.com/embodied-generalist/embodied-generalist/tree/567f2d809cf8b21289d7fb9d3b616ae9c405cba3
+https://github.com/embodied-generalist/embodied-generalist/tree/567f2d809cf8b21289d7fb9d3b616ae9c405cba3
+"""
+
+def disabled_train(self, mode=True):
+    """
+    Overwrite model.train with this function to make sure train/eval mode does not change anymore
+    """
+    return self
+
 def maybe_autocast(model, dtype='bf16', enabled=True):
     # if on cpu, don't use autocast
     # if on gpu, use autocast with dtype if provided, otherwise use torch.float16

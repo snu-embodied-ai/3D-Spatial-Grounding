@@ -51,7 +51,7 @@ class GeometricFeaturePropagation(nn.Module):
 
     def forward(self,
                 intermediate_features: list[torch.Tensor],
-                intermedidate_points: list[torch.Tensor],
+                intermediate_points: torch.Tensor,
                 hidden_point: torch.Tensor,
                 gem_features: torch.Tensor,
                 xyz: torch.Tensor):
@@ -60,6 +60,8 @@ class GeometricFeaturePropagation(nn.Module):
         ---
         intermediate_features: list[torch.Tensor]
             List of Intermediate Features from the point encoder, each tensors having shape of `(B, G, pc_feat_dim)`
+        intermediate_points: torch.Tensor
+            Intermediate centers from the point encoder. Since the number of center points are all the same through the transformer layers, only single tensor is required instead of a list
         hidden_point: torch.Tensor
             Final hidden state of <POINT> tokens from the LLM output. Shape of `(B, G, LLM_dim)`
         gem_features: torch.Tensor
@@ -82,7 +84,7 @@ class GeometricFeaturePropagation(nn.Module):
                 downsampled_xyz = gather_operation(xyz_flipped, fps_idx).transpose(1,2).contiguous()
 
                 intermed_feat = intermediate_features[self.selected_idx[i]]
-                intermed_xyz= intermedidate_points[self.selected_idx[i]]
+                intermed_xyz= intermediate_points
 
                 query = self.upsample_layers[i](downsampled_xyz, intermed_xyz, downsampled_gem_feat, intermed_feat)
             else:
@@ -91,7 +93,7 @@ class GeometricFeaturePropagation(nn.Module):
 
             # Attentive Propagation
             # 1. Group the points
-            group_idx = knn_point(self.K, intermedidate_points[self.selected_idx[i+1]], downsampled_xyz)
+            group_idx = knn_point(self.K, intermediate_points, downsampled_xyz)
             grouped_feats = index_points(fused_feats, group_idx)
 
             # 2. Reshape the tensors for attetion

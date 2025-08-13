@@ -113,7 +113,7 @@ class CA_Uni3D(nn.Module):
         if self.align_clip_dim:
             x = self.uni3d.trans2embed(x)
 
-        return x, intermediate_features
+        return x, intermediate_features, center
 
             
 

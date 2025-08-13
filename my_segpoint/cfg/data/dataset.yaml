@@ -1,5 +1,10 @@
 # Maybe this format will fit better
 SemanticSegmentation:
+  ScanNet:
+    root_dir: data/scannet
+    ply_name: _vh_clean_2.labels.ply
+    metadata_dir: metadata
+
   ScanNet200:
     root_dir:
     ply_name:

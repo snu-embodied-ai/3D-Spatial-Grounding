@@ -74,6 +74,6 @@ LLM:
 SEG_projector:
   sizes: [4096, 4096, 256]
 
-
+loss_weights: [1.0, 2.0, 2.0]
 
 distributed: False
