@@ -17,7 +17,7 @@ def disabled_train(self, mode=True):
 def maybe_autocast(model, dtype='bf16', enabled=True):
     # if on cpu, don't use autocast
     # if on gpu, use autocast with dtype if provided, otherwise use torch.float16
-    enable_autocast = model.device != torch.device('cpu')
+    enable_autocast = next(model.parameters()).device != torch.device('cpu')
 
     if dtype == 'bf16':
         dtype = torch.bfloat16

@@ -1,6 +1,7 @@
 GEM:
   num_layers: 3
   deform_radius: 5.0
+  num_samples: 16
   KPConv:
     in_channels: [3, 64, 128]
     out_channels: [64, 128, 256]
@@ -22,7 +23,7 @@ Point_encoder:
     freeze: True
     pc_model: eva02_base_patch14_448
     pretrained_pc: ""
-    ckpt_path: model/Uni3D/path/to/checkpoints/model.pt
+    ckpt_path: model//modules/Uni3D/path/to/checkpoints/model.pt
     drop_path_rate: 0.20
 
     PointcloudEncoder:
@@ -35,16 +36,18 @@ Point_encoder:
       patch_dropout: 0.0
   
   CA_Uni3D:
+    flash_attention: True
     num_heads: 8
     dropout_rate: 0.5
     gem_dim: 256
-    align_clip_dim: False
+    align_clip_dim: True
     num_CA_layers: 4
 
 
 GFP:
+  flash_attention: True
   selected_intermed_idx: [2, 3, 4]
-  num_intermed_feats: [8192, 2048, 512]
+  num_intermed_feats: [4096, 2048, 512]
   gem_dim: 256
   pc_feat_dim: 768
   num_neighbors: 5
@@ -56,12 +59,11 @@ GFP:
 LLM:
   model_name: meta-llama/Llama-2-7b-chat-hf
   new_model_name: SegPoint_Llama2-7b-chat
-  device_map: auto              # "auto" for multi-GPU and GPU
   truncation_side: right
   padding_side: right
 
-  special_tokens:
-    seg_token: <SEG>
+  seg_token: "<SEG>"
+  point_token: "<POINT>"
 
   LoRA:
     train_with: True

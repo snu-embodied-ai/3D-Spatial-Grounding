@@ -3,10 +3,7 @@ import torch.nn as nn
 
 from einops import rearrange
 
-# from torch_points3d.core.common_modules import FastBatchNorm1d
-# from torch_points3d.modules.KPConv.kernels import KPConvDeformableLayer
-from KPConv.models.blocks import KPConv, BatchNormBlock
-from KPConv.cpp_wrappers.cpp_neighbors import radius_neighbors
+from .KPConv.models.blocks import KPConv, BatchNormBlock
 
 class KPConvBlock(nn.Module):
     def __init__(

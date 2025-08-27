@@ -4,8 +4,9 @@ import torch.nn as nn
 from omegaconf import OmegaConf, DictConfig
 import einops
 
-from kpconv import KPConvBlock
-from KPConv.datasets.common import batch_neighbors
+from .kpconv import KPConvBlock
+from pointnet2_ops.pointnet2_utils import ball_query
+
 
 class GeometricEnhancer(nn.Module):
     def __init__(
@@ -16,9 +17,10 @@ class GeometricEnhancer(nn.Module):
 
         num_layers = cfg.num_layers
         deform_radius = cfg.deform_radius
-        KPConv_cfg = cfg.KPConv_cfg
+        self.num_samples = cfg.num_samples
+        KPConv_cfg = cfg.KPConv
 
-        self.r = deform_radius * KPConv_cfg.radius
+        self.r = deform_radius * KPConv_cfg.other.radius
         self.conv_layers = nn.ModuleList()
         self.in_channels = KPConv_cfg.in_channels
         self.out_channels = KPConv_cfg.out_channels
@@ -44,23 +46,25 @@ class GeometricEnhancer(nn.Module):
             Output Tensor including enhanced features (excluding xyz) Shape: (B, N, D)
         """
         B, N, D = input.size()
+        input_dtype = input.dtype
 
-        batch_inds = torch.ones(B, device=input.device) * N
+        # TRY knn sampling if this doesn't work
+        points = input[:,:,:3].contiguous()
+
+        neighbors = ball_query(self.r,
+                               self.num_samples,
+                               points.to(torch.float32),
+                               points.to(torch.float32))
+        
         stacked_input = einops.rearrange(input, 'B N D -> (B N) D')
-
+        neighbors = einops.rearrange(neighbors, 'B N M -> (B N) M').to(torch.int64)
         points = stacked_input[:,:3]
         features = stacked_input[:,3:]
-
-        neighbors = batch_neighbors(queries=points,
-                                    supports=points,
-                                    q_batches=batch_inds,
-                                    s_batches=batch_inds,
-                                    radius=self.r)
         
         for conv in self.conv_layers:
             features = conv(features, points, neighbors)
             
-        output = einops.rearrange(features, '(B N) D -> B N D', B=B)
+        output = einops.rearrange(features, '(B N) D -> B N D', B=B).to(input_dtype)
 
         return output
 

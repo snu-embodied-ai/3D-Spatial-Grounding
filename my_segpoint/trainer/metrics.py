@@ -2,14 +2,23 @@ import torch
 
 def compute_mIoU_binary_groups(preds, targets, valid_mask, threshold=0.5):
     """
-    preds:      (B, G, N) predicted scores (probabilities or logits)
-    targets:    (B, G, N) binary ground truth masks
-    valid_mask: (B, G) boolean or 0/1 mask for valid groups
-    threshold:  float, threshold for binarizing preds if not already binary
+    Parameters
+    ---
+    preds: torch.Tensor
+        (B, G, N) predicted scores (probabilities or logits)
+    targets: torch.Tensor
+        (B, G, N) binary ground truth masks
+    valid_mask: torch.Tensor
+        (B, G) boolean or 0/1 mask for valid groups
+    threshold: float
+        threshold for binarizing preds if not already binary
 
-    Returns:
-        mIoU: per batch scalar mean IoU over all valid groups
-        iou_per_group: (B, G) IoU values (NaN for invalid groups)
+    Returns
+    ---
+        mIoU: torch.Tensor
+            per batch scalar mean IoU over all valid groups
+        iou_per_group: torch.Tensor
+            (B, G) IoU values (NaN for invalid groups)
     """
     # If preds are probabilities/logits, threshold them
     preds_bin = (preds >= threshold).to(torch.bool)

@@ -6,8 +6,9 @@ from pathlib import Path
 from omegaconf import OmegaConf, DictConfig
 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, DistributedSampler
 import torch.nn.functional as F
+import torch.distributed as dist
 
 import numpy as np
 import pandas as pd
@@ -16,12 +17,16 @@ import open3d as o3d
 from plyfile import PlyData
 
 from data.utils import load_json
-from data.constants.scannet import CLASS_LABELS, VALID_CLASS_IDS, IGNORE_LABELS as SCANNET_CLASSES, SCANNET_CLASS_IDS, SCANNET_IGNORE_LABELS
-from my_segpoint.data.constants.dataset_consts import TASKS, TASK_TYPE, SCENE_IDS, DATASETS
+from data.constants.scannet import (
+    CLASS_LABELS as SCANNET_CLASSES, 
+    VALID_CLASS_IDS as SCANNET_CLASS_IDS, 
+    IGNORE_LABELS as SCANNET_IGNORE_LABELS)
+from data.constants.dataset_consts import TASKS, TASK_TYPE, DATASETS
 
-"""
-TODO: COLLATE FUNCTION!!!
-"""
+from accelerate.logging import get_logger
+
+# TODO: STUDY LOGGER
+logger = get_logger(__name__)
 
 class SegPointDatasetBase(Dataset):
 
@@ -67,43 +72,63 @@ class SegPointDatasetBase(Dataset):
         for aug in self.augmentations:
             pass
 
-        # 4. Convert numpy array to torch
-        pcd = torch.from_numpy(pcd).float()
-
         return pcd
     
-    # def get_metadata(self,
-    #                  dataset_name: str,
-    #                  task: str,
-    #                  task_type: str,):
-    #     """
-    #     Load the metadata for queried dataset
+    def per_cat_sample(self, pcd: np.ndarray,
+                           labels: np.ndarray,
+                           num_samples: int,
+                           shuffle: bool = True):
+        """
+        Sample points per category using FPS (farthest point sampling)
 
-    #     1. "Specific Category" Semantic Segmentation
-    #         each sample is a dictionary with keys - 'dataset_name', 'scene_id'
-    #     2. "All Category" Semantic Segmentation
-    #         each sample is a dictionary with keys - 'dataset_name', 'scene_id'
+        Parameters
+        ---
+        pcd: np.ndarray
+            Pointcloud data containing xyz and other features (rgb, ...)
+        labels: np.ndarray
+            Label per point
 
-    #     """
-    #     pass
+        Returns
+        ---
+        all_pcd: torch.Tensor
+            Sampled pointcloud data
+        all_labels: torch.Tensor
+            Labels of sampled points
+        """
+        rng = np.random.default_rng()
 
-    # def load_scannet200(self):
-    #     pass
+        unique_labels = np.unique(labels)
 
-    # def load_s3dis(self):
-    #     pass
+        all_pcd = []
+        all_labels = []
 
-    # def load_scanrefer(self):
-    #     pass
+        for category in unique_labels:
+            is_cur_cat = labels == category
+            cur_cat_pcd = pcd[is_cur_cat]
 
-    # def load_sr3d(self):
-    #     pass
+            if cur_cat_pcd.shape[0] > num_samples:
+                # FPS
+                cur_cat_pcd = rng.choice(cur_cat_pcd, num_samples, replace=False, axis=0)
 
-    # def load_nr3d(self):
-    #     pass
+            cur_labels = np.full(cur_cat_pcd.shape[0], fill_value=category)
 
-    # def load_multi3drefer(self):
-    #     pass
+            all_pcd.append(cur_cat_pcd)
+            all_labels.append(cur_labels)
+
+        all_pcd = np.concatenate(all_pcd, axis=0)
+        all_labels = np.concatenate(all_labels, axis=0)
+
+        if shuffle:
+            pcd_w_labels = np.concatenate([all_pcd, all_labels.reshape(-1,1)], axis=1)
+            pcd_w_labels = rng.permutation(pcd_w_labels, axis=0)
+            all_pcd = pcd_w_labels[:,:-1]
+            all_labels = pcd_w_labels[:,-1]
+
+        all_pcd = torch.from_numpy(all_pcd).float()
+        all_labels = torch.from_numpy(all_labels)
+
+        return all_pcd, all_labels
+
 
 
 
@@ -116,9 +141,7 @@ Follow the LEO training pipelines
 """
 Write `__getitem__()` based on the label index. Therefore, a single label becomes a single sample, not the scene itself. Same scenes can be included into a single batch, but try to avoid that as you can.
 """
-# Assuming "Specific Category" semantic segmentation,
-#     - " .... {category} .... "
-# Here, a single category becomes a single sample, therefore a single scene can generate multiple samples.
+
 """
 For "Specific Category" semantic segmentation,
     - " .... {category} .... "
@@ -139,173 +162,119 @@ class SemanticSegmentationDataset(SegPointDatasetBase):
                  instructions_cfg_path: str):
         super().__init__(instructions_cfg_path)
 
-        self.cfg = OmegaConf.load(dataset_cfg_path)
+        self.cfg = OmegaConf.load(dataset_cfg_path)["SemanticSegmentation"]
         self.split = split
         self.seg_type = segmentation_type
 
         # Load the metadata for each dataset (scene id, categories, ...)
         self.all_samples = []
-        self.category_mapping_files = dict()
         for dataset_name, dataset_paths in self.cfg.items():
-            metadata_dir = Path(dataset_paths) / dataset_paths.metatdata_dir
+            metadata_dir = Path(dataset_paths.root_dir) / dataset_paths.metadata_dir
             with open(metadata_dir / f"{self.split}.txt", 'r') as f:
                 scenes = f.read().split("\n")
 
-            # metadata = self.get_metadata(dataset_name=dataset_name,
-            #                              task="SemanticSegmentation",
-            #                              task_type=self.seg_type)
-            # self.all_samples.append(metadata)
             self.all_samples.extend(list(zip([dataset_name] * len(scenes), scenes)))
             
-
-            # category_mapping_file = Path(dataset_paths.root_dir) / dataset_paths.category_mapping_file_name
-            # category_mapping = pd.read_csv(category_mapping_file,
-            #                                sep="\t" if category_mapping_file.endswith('.tsv') else ",")
-            # self.category_mapping_files[dataset_name] = category_mapping
-
-    # def cat_2_int(self,
-    #               dataset_name: str,
-    #               obj_label: str):
-    #     cat_mapping = self.category_mapping_files[dataset_name]
-    #     cat_row = cat_mapping.loc[cat_mapping["raw_category"] == obj_label]
-    #     if not cat_row.empty:
-    #         cat_2_int = int(cat_row.iloc[0]["id"])
-    #     else:
-    #         raise ValueError(f"Category '{obj_label}' not found in category mapping for dataset '{dataset_name}'.")
-        
-    #     return cat_2_int
-
-
-    # def select_random_category(self,
-    #                            objects_in_scene: list[dict],
-    #                            dataset_name: str):
-    #     """
-    #     Changing into a dictionary with label(key)-segments(value) pair, then selecting a random category
-    #     """
-    #     category_dict = defaultdict(list)
-
-    #     for obj in objects_in_scene:
-    #         cat_2_int = self.cat_2_int(dataset_name=dataset_name,
-    #                        obj_label=obj["label"])
-            
-    #         category_dict[cat_2_int].extend(obj["segments"])
-
-    #     random_cat = random.choice(list(category_dict.keys()))
-    #     segments = category_dict[random_cat]
-
-    #     return random_cat, segments
-
-    # def generate_all_cat_mask(self,
-    #                           segIndices: list,
-    #                           objects_in_scene: list,
-    #                           dataset_name: str,
-    #                           scene_id: str):
-    #     # TODO : Change this to separate binary masks!!
-    #     mask = -np.ones(segIndices, dtype=int)
-    #     categories = set()
-
-    #     for obj in objects_in_scene:
-    #         cat_2_int = self.cat_2_int(dataset_name=dataset_name,
-    #                                    obj_label=obj["label"])
-    #         categories.add(cat_2_int)
-
-    #         obj_point_idx = np.isin(segIndices, obj["segments"])
-    #         mask[obj_point_idx] = cat_2_int
-
-    #     if np.any(np.isin(mask, -1)):
-    #         raise Exception(f"{scene_id} in dataset {dataset_name} has unlabeled points")
-        
-    #     return categories, mask
-
-
-            
     def __getitem__(self, index):
-        # return super().__getitem__(index)
         # Dictionary with keys - 'scene_id', 'xyz', 'features', 'task', 'task_type', 'mask(labels)', 'category' (for specific), (+ @)
-        dataset_name, scene_id = self.all_samples[index]
+        try:
+            dataset_name, scene_id = self.all_samples[index]
 
-        # 1. Get dataset config to get file paths & Get info files
-        dataset_paths = self.cfg[dataset_name]
-        root_dir = Path(dataset_paths.root_dir)
+            # 1. Get dataset config to get file paths & Get info files
+            dataset_paths = self.cfg[dataset_name]
+            root_dir = Path(dataset_paths.root_dir)
+            scenes_dir = root_dir / dataset_paths.scenes_dir
 
-        # seg_path = root_dir / scene_id / dataset_paths.segments_file_name
-        # semseg_path = root_dir / scene_id / dataset_paths.semantics_file_name
-        # cat_mapping = self.category_mapping_files[dataset_name]
+            # 2. Get pointcloud
+            # 2-1. Read PLY
+            ply_name = f"{scene_id}{dataset_paths.ply_name}"
+            ply_path = scenes_dir / scene_id / ply_name
+            if not ply_path.exists():
+                raise FileNotFoundError(f"PLY file not found: {ply_path}")
+            
+            pcd = o3d.io.read_point_cloud(ply_path)
+            xyz = np.asarray(pcd.points)
+            color = np.asarray(pcd.colors)
 
-        # seg_data = load_json(seg_path)
-        # semseg_data = load_json(semseg_path)
-        # segIndices = seg_data["segIndices"]
-        # objects_in_scene = semseg_data["segGroups"]
+            if xyz.shape[0] == 0:
+                raise ValueError(f"No points found in {ply_path}")
 
-        # if self.seg_type == "specific":
-        #     # Select category (not object, since multiple objects can exist in a scene)
-        #     random_category, segments = self.select_random_category(objects_in_scene, dataset_name)
+            if color.shape[0] != xyz.shape[0]:
+                raise ValueError(f"Color and XYZ size mismatch in {ply_path}")
 
-        #     # Create category mask
-        #     mask = np.isin(segIndices, segments)
-        # elif self.seg_type == "all_category":
-        #     all_cats, mask = self.generate_all_cat_mask(segIndices,
-        #                                                 objects_in_scene,
-        #                                                 dataset_name,
-        #                                                 scene_id)
-        # else:
-        #     raise Exception("Other semantic segmentation besides specific category and all category are not implemented")
+            # 2-2. Preprocess features
+            features = np.concatenate([xyz, color], axis=-1)
+            features = self.preprocess_pcd(features)
 
-        # 2. Get pointcloud
-        ply_path = root_dir / scene_id / dataset_paths.ply_name
-        pcd = o3d.io.read_pointcloud(ply_path)
-        xyz = np.asarray(pcd.points)
-        color = np.asarray(pcd.colors)
+            # 2-3. Get labels per point
+            label_pcd = PlyData.read(ply_path)
+            if "label" not in label_pcd["vertex"].data.dtype.names:
+                raise KeyError(f"'label' not found in {ply_path}")
+            
+            labels = np.asarray(label_pcd['vertex'].data['label'])
+            if labels.shape[0] != xyz.shape[0]:
+                raise ValueError(f"Labels length does not match points in {ply_path}")
 
-        features = np.concatenate([xyz, color], axis=-1)
-        features = self.preprocess_pcd(features)
+            if dataset_paths.num_samples is not None:
+                features, labels = self.per_cat_sample(features, labels, dataset_paths.num_samples, shuffle=True)
 
-        label_pcd = PlyData.read(ply_path)
-        labels = np.asarray(label_pcd['vertex'].data['label'])
+            if self.seg_type == "specific":
+                if dataset_name == "ScanNet":
+                    category = random.choice(SCANNET_CLASS_IDS)
+                    mask = (labels == category).float().unsqueeze(dim=0)
+                    num_category = 1
+                else:
+                    # Other dataset
+                    raise NotImplementedError(f"Segmentation type '{self.seg_type}' not implemented for {dataset_name}")
+            
+            elif self.seg_type == "all_categories":
+                if dataset_name == "ScanNet":
+                    valid = torch.isin(labels, torch.as_tensor(SCANNET_CLASS_IDS, dtype=torch.long))
+                    not_onehot_mask = torch.full_like(labels, fill_value=-100)
+                    not_onehot_mask[valid] = labels[valid]
+                    all_cats = torch.unique(not_onehot_mask)
+                    all_cats = all_cats[all_cats != -100]       # Exclude -100
 
-        if self.seg_type == "specific":
-            if dataset_name == "ScanNet":
-                random_category = random.choice(SCANNET_CLASS_IDS)
-                mask = torch.from_numpy(labels == random_category).int()
+                    if len(all_cats) == 0:
+                        raise ValueError(f"No valid categories found in {ply_path}")
+
+                    # Create a binary mask for each category in all_cats
+                    # TODO: mask should be in shape of (G, N) (after batching, (B, G, N))
+                    # Each (N,) should be a binary mask (after batching (B, N))
+                    mask = not_onehot_mask.unsqueeze(0) == all_cats.unsqueeze(1)
+                    category = all_cats
+                    num_category = len(all_cats)
+                else:
+                    # Other dataset
+                    raise NotImplementedError(f"Segmentation type '{self.seg_type}' not implemented for {dataset_name}")
+
             else:
-                # Other dataset
-                pass
-        
-        elif self.seg_type == "all_categories":
-            if dataset_name == "ScanNet":
-                valid_labels = np.isin(labels, SCANNET_CLASS_IDS)
-                not_onehot_mask = np.full_like(labels, fill_value=-100)
-                not_onehot_mask[valid_labels] = labels[valid_labels]
-                all_cats = not_onehot_mask.unique()[1:]        # Exclude -100
+                raise ValueError(f"Unknown segmentation type: {self.seg_type}")
 
-                # Create a binary mask for each category in all_cats
-                mask = (labels[None, :] == torch.from_numpy(all_cats)[:, None]).int()
-                # mask = F.one_hot(mask, num_classes=len(SCANNET_CLASS_IDS))
-                # TODO: mask should be in shape of (B, G, N)
-                # Each (B, N) should be a binary mask
-            else:
-                # Other dataset
-                pass
+            # 3. Generate Data Dictionary
+            # Store the indices instead of storing the raw string for converting torch tensors
+            data_dict = {
+                "dataset_idx": DATASETS.index(dataset_name),
+                "xyz": features[:,:3],
+                "features": features,
+                "task": TASKS.index("SemanticSegmentation"),
+                "task_type": TASK_TYPE.index(self.seg_type),
+                "mask": mask,
+                "category": category,
+                "num_category": num_category
+            }
 
+            assert isinstance(data_dict, dict), (index, dataset_name, scene_id)
+            for k in ["dataset_idx","xyz","features","task","task_type","mask","category","num_category"]:
+                assert k in data_dict, (k, index, dataset_name, scene_id)
 
-        # 3. Generate Data Dictionary
-        # Store the indices instead of storing the raw string for converting torch tensors
-        data_dict = {
-            "dataset_idx": DATASETS.index(dataset_name),
-            # "scene_id": SCENE_IDS[dataset_name].index(scene_id),      # Is this needed?
-            "xyz": features[:,:3],
-            "features": features,
-            "task": TASKS.index("SemanticSegmentation"),
-            "task_type": TASK_TYPE.index(self.seg_type),
-            "mask": mask
-        }
-        if self.seg_type == "specific":
-            data_dict["category"] = random_category
-        elif self.seg_type == "all_category":
-            data_dict["category"] = all_cats
-            data_dict["num_category"] = len(all_cats)
+            return data_dict
 
-        return data_dict
+        except Exception as e:
+            logger.info(f"[ERROR] Dataset index {index} ({dataset_name}/{scene_id}): {e}")
+            print(f"[ERROR] Dataset index {index} ({dataset_name}/{scene_id}): {e}")
+            return None
+
 
     def __len__(self):
         return len(self.all_samples)
@@ -326,8 +295,52 @@ class Instruct3DSegmentationDataset(SegPointDatasetBase):
         self.type = None        # specific, all_categories
 
 
-def default_collate_fn():
-    pass
+def default_collate_fn(batch):
+    # rank = dist.get_rank() if dist.is_initialized() else 0
+    # print(f"[rank {rank}] batch_len={len(batch)}",
+    #       flush=True)
+    
+    batch = [s for s in batch if s is not None]
+    if len(batch) == 0:
+        return None
+    
+    max_num_points = max([sample["xyz"].shape[0] for sample in batch])
+    max_num_cats = max([sample["mask"].shape[0] for sample in batch])
+
+    batched_features = torch.full((len(batch), max_num_points, batch[0]["features"].size(1)), fill_value=-100.0)
+    batched_masks = torch.full((len(batch), max_num_cats, max_num_points), fill_value=-100.0)
+    batched_categories = torch.full((len(batch), max_num_cats), fill_value=-100)
+    batched_padding_mask = torch.zeros((len(batch), max_num_points), dtype=bool)
+    batched_padding_cats = torch.zeros_like(batched_masks, dtype=bool)
+    batched_num_cats = []
+
+    for i, sample in enumerate(batch):
+        num_points, _ = sample["features"].size()
+        num_cats, _ = sample["mask"].size()
+
+        batched_features[i, :num_points, :] = sample["features"]
+        batched_masks[i, :num_cats, :num_points]= sample["mask"]
+        batched_categories[i, :num_cats] = sample["category"]
+        batched_padding_mask[i, :num_points] = True
+        batched_padding_cats[i, :num_cats, :num_points] = True
+        batched_num_cats.append(sample["num_category"])
+
+    data_dict = {
+        "dataset_idx": batch[0]["dataset_idx"],
+        "xyz": batched_features[:,:,:3],
+        "features": batched_features,
+        "task": batch[0]["task"],
+        "task_type": batch[0]["task_type"],
+        "mask": batched_masks,
+        "category": batched_categories,
+        "num_category": torch.tensor(batched_num_cats),
+        "padding_mask": batched_padding_mask,
+        "valid_gt_mask": batched_padding_cats
+    }
+
+    return data_dict
+
+        
 
 
 def build_dataloaders(task: str,
@@ -342,12 +355,14 @@ def build_dataloaders(task: str,
             dataset_cfg_path=cfg.dataset_config_path,
             instructions_cfg_path=cfg.instructions_config_path
                     )
+        train_sampler = DistributedSampler(train_dataset, shuffle=True, drop_last=True)
         dataloaders['train'] = DataLoader(
             train_dataset,
             batch_size=cfg.train.batch_size,
             num_workers=cfg.train.num_workers,
             pin_memory=cfg.train.pin_memory,
-            shuffle=True
+            collate_fn=default_collate_fn,
+            sampler=train_sampler
         )
 
         val_dataset = SemanticSegmentationDataset(
@@ -356,12 +371,14 @@ def build_dataloaders(task: str,
             dataset_cfg_path=cfg.dataset_config_path,
             instructions_cfg_path=cfg.instructions_config_path
         )
+        val_sampler = DistributedSampler(val_dataset, shuffle=False, drop_last=False)
         dataloaders['val'] = DataLoader(
             val_dataset,
             batch_size=cfg.val.batch_size,
             num_workers=cfg.val.num_workers,
             pin_memory=cfg.val.pin_memory,
-            shuffle=False
+            collate_fn=default_collate_fn,
+            sampler=val_sampler
         )
 
         test_dataset = SemanticSegmentationDataset(
@@ -370,12 +387,14 @@ def build_dataloaders(task: str,
             dataset_cfg_path=cfg.dataset_config_path,
             instructions_cfg_path=cfg.instructions_config_path
         )
+        test_sampler = DistributedSampler(test_dataset, shuffle=False, drop_last=False)
         dataloaders['test'] = DataLoader(
             test_dataset,
             batch_size=cfg.test.batch_size,
             num_workers=cfg.test.num_workers,
             pin_memory=cfg.test.pin_memory,
-            shuffle=False
+            collate_fn=default_collate_fn,
+            sampler=test_sampler
         )
                     
     elif task == "ReferringSegmentation":

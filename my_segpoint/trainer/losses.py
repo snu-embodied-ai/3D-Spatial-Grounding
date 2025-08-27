@@ -14,7 +14,7 @@ def masked_cross_entropy(pred: torch.Tensor,
     target: torch.Tensor
         Ground truth of shape (B, G, N). Every (B, N) tensor is a GT binary segmentation mask corresponding to the its category (alphabetic order as the ground truth answer)
     mask: torch.Tensor, optional
-        Boolean or float mask of shape (B, G), 1=valid, 0=ignore.
+        Boolean or float mask of shape (B, G, N), 1=valid, 0=ignore.
     reduction: str
         Reduction method for the loss values. "none", "sum" and "mean" allowed.
 
@@ -38,7 +38,7 @@ def masked_cross_entropy(pred: torch.Tensor,
     if reduction == 'mean':
         return loss.sum() / mask.sum().clamp_min(1.0)
     elif reduction == 'batch_mean':
-        return loss.sum(dim=-1) / (mask.sum(dim=-1) + eps)
+        return loss.sum(dim=(1,2)) / (mask.sum(dim=(1,2)) + eps)
     elif reduction == 'sum':
         return loss.sum()
     elif reduction == 'none':
@@ -62,7 +62,7 @@ def DiceLoss(pred: torch.Tensor,
     target: torch.Tensor
         Ground truth of shape (B, G, N). Every (B, N) tensor is a GT binary segmentation mask corresponding to the its category (alphabetic order as the ground truth answer)
     mask: torch.Tensor, optional
-        Boolean or float mask of shape (B, G), 1=valid, 0=ignore.
+        Boolean or float mask of shape (B, G, N), 1=valid, 0=ignore.
     reduction: str
         Reduction method for the loss values. "none", "sum" and "mean" allowed.
     epsilon: float
@@ -84,9 +84,8 @@ def DiceLoss(pred: torch.Tensor,
     pred_soft = F.softmax(pred, dim=-1)  # (B, G, N)
 
     # Apply mask to both pred and target
-    mask_exp = mask.unsqueeze(-1)  # (B, G, 1)
-    pred_soft = pred_soft * mask_exp
-    target_one_hot = target_one_hot * mask_exp
+    pred_soft = pred_soft * mask
+    target_one_hot = target_one_hot * mask
 
     # Dice computation
     intersection = torch.sum(pred_soft * target_one_hot, dim=(1, 2))  # (B,)

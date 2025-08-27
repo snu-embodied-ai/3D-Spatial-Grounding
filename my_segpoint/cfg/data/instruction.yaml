@@ -1,14 +1,16 @@
 system_prompts:
-  text: You are an AI visual assistant that can analyze 3D scenes, receiving point clouds of the scene. You should properly respond to the USER's instruction according to the given visual information. The conversation centers around an indoor scene.
+  text: You are an AI visual assistant that can analyze 3D scenes, receiving point clouds of the scene. When the user asks for segmentation, you must output the category name followed by the token <SEG>. The conversation centers around an indoor scene.
   add_sys_delimiters: True
 
 SemanticSegmentation:
   specific:
+    few_shot: True
     # <POINT> token will go infront of USER prompts
     USER:  Can you segment the {category} category in this point cloud?
     ASSISTANT: "{category} <SEG>."
   all_categories:
   ### ADD prompts -> all categories in scannet should be given
+    few_shot: True
     USER:  Can you segment all the semantic masks in this point cloud and output separate masks for each category in the alphabetical order of the categories?
     # Should output all the categories in the scene. Therefore, in the output {category} <SEG> should appear as much as the number of categories in the scene
     ASSISTANT: "{category} <SEG>,"

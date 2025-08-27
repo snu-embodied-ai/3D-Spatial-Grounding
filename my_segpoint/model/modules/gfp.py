@@ -1,12 +1,14 @@
 import torch
 import torch.nn as nn
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from omegaconf import OmegaConf, DictConfig
 import einops
+from typing import List, Dict
 
 from pointnet2_ops.pointnet2_modules import PointnetFPModule
 from pointnet2_ops.pointnet2_utils import furthest_point_sample, gather_operation
-from modules.utils.point_utils import fps, knn_point, index_points
+from model.modules.utils.point_utils import fps, knn_point, index_points
 
 class GeometricFeaturePropagation(nn.Module):
     def __init__(self,
@@ -18,6 +20,8 @@ class GeometricFeaturePropagation(nn.Module):
         self.gem_dim = cfg.gem_dim
         self.pc_feat_dim = cfg.pc_feat_dim
         self.K = cfg.num_neighbors
+
+        self.use_flash_att = cfg.flash_attention
 
         # Upsampling layers for the third/fourth intermediate features, excluding the final(fifth) feature
         num_upsample_layers = len(self.selected_idx) - 1
@@ -32,7 +36,7 @@ class GeometricFeaturePropagation(nn.Module):
         num_attentive_props = len(self.selected_idx)
         self.attentive_props = nn.ModuleList()
         for i in range(num_attentive_props):
-            if i == 0:
+            if i == num_attentive_props - 1:
                 kv_dim = cfg.LLM_hidden_dim + self.pc_feat_dim
             else:
                 kv_dim = self.gem_dim
@@ -50,7 +54,7 @@ class GeometricFeaturePropagation(nn.Module):
 
 
     def forward(self,
-                intermediate_features: list[torch.Tensor],
+                intermediate_features: List[torch.Tensor],
                 intermediate_points: torch.Tensor,
                 hidden_point: torch.Tensor,
                 gem_features: torch.Tensor,
@@ -66,8 +70,10 @@ class GeometricFeaturePropagation(nn.Module):
             Final hidden state of <POINT> tokens from the LLM output. Shape of `(B, G, LLM_dim)`
         gem_features: torch.Tensor
             Resultant geometric features (xyz not included explicitly). Shape of `(B, N, D)`
+        xyz: torch.Tensor
         """
         B, _, _ = gem_features.size()
+        input_dtype = hidden_point.dtype
 
         # 1. Concatenate the last intermediate features with hidden_point
         fused_feats = torch.cat([intermediate_features[-1], hidden_point], dim=-1)
@@ -75,18 +81,19 @@ class GeometricFeaturePropagation(nn.Module):
         for i in range(-2, -len(self.selected_idx) - 2, -1):
             if i > -len(self.selected_idx) -1:
                 # Upsampling and Downsampling
-                fps_idx = furthest_point_sample(xyz, self.num_intermed_feats[i])
+                # Ensure the dtype is maintained after upsampling
+                fps_idx = furthest_point_sample(xyz.float(), self.num_intermed_feats[i])
 
                 feat_flipped = gem_features.transpose(1,2).contiguous()
-                downsampled_gem_feat = gather_operation(feat_flipped, fps_idx).transpose(1,2).contiguous()            
+                downsampled_gem_feat = gather_operation(feat_flipped.float(), fps_idx)
 
                 xyz_flipped = xyz.transpose(1,2).contiguous()
-                downsampled_xyz = gather_operation(xyz_flipped, fps_idx).transpose(1,2).contiguous()
+                downsampled_xyz = gather_operation(xyz_flipped.float(), fps_idx).transpose(1,2).contiguous()
 
-                intermed_feat = intermediate_features[self.selected_idx[i]]
+                intermed_feat = intermediate_features[self.selected_idx[i]].transpose(1,2).contiguous()            
                 intermed_xyz= intermediate_points
 
-                query = self.upsample_layers[i](downsampled_xyz, intermed_xyz, downsampled_gem_feat, intermed_feat)
+                query = self.upsample_layers[i+1](downsampled_xyz, intermed_xyz.float(), downsampled_gem_feat, intermed_feat.float()).transpose(1,2).contiguous().to(input_dtype)
             else:
                 downsampled_xyz = xyz
                 query = gem_features
@@ -94,15 +101,21 @@ class GeometricFeaturePropagation(nn.Module):
             # Attentive Propagation
             # 1. Group the points
             group_idx = knn_point(self.K, intermediate_points, downsampled_xyz)
-            grouped_feats = index_points(fused_feats, group_idx)
+            grouped_feats = index_points(fused_feats, group_idx).to(input_dtype)
 
             # 2. Reshape the tensors for attetion
             query_flat = einops.rearrange(query, 'B N D -> (B N) 1 D')
             keyval_flat = einops.rearrange(grouped_feats, 'B N K D -> (B N) K D')
 
-            att_vals = self.attentive_props[i+1](query=query_flat,
-                                                 key=keyval_flat,
-                                                 val=keyval_flat)
+            if self.use_flash_att:
+                with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+                    att_vals, _ = self.attentive_props[i+1](query=query_flat,
+                                                            key=keyval_flat,
+                                                            value=keyval_flat)
+            else:
+                att_vals, _ = self.attentive_props[i+1](query=query_flat,
+                                                        key=keyval_flat,
+                                                        value=keyval_flat)
             
             att_vals = einops.rearrange(att_vals, '(B N) 1 D -> B N D', B=B)
             fused_feats = query + att_vals

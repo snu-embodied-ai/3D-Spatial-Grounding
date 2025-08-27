@@ -10,7 +10,6 @@ from accelerate.scheduler import AcceleratedScheduler
 from accelerate.state import PartialState
 from accelerate.utils import DistributedType, recursively_apply
 from accelerate.utils.constants import TORCH_DISTRIBUTED_OPERATION_TYPES
-from torch._six import string_classes
 from torch.utils.data import random_split
 try:
     from torch.optim.lr_scheduler import LRScheduler
@@ -70,7 +69,7 @@ def default_collate(batch):
         return torch.tensor(batch, dtype=torch.float64)
     elif isinstance(elem, int):
         return torch.tensor(batch)
-    elif isinstance(elem, string_classes):
+    elif isinstance(elem, str):
         return batch
     elif isinstance(elem, collections.abc.Mapping):
         try:
@@ -129,9 +128,7 @@ def gather_object(object: Any):
     Returns:
         The same data structure as `object` with all the objects sent to every device.
     """
-    if PartialState().distributed_type == DistributedType.TPU:
-        raise NotImplementedError("gather objects in TPU is not supported")
-    elif PartialState().distributed_type in TORCH_DISTRIBUTED_OPERATION_TYPES:
+    if PartialState().distributed_type in TORCH_DISTRIBUTED_OPERATION_TYPES:
         return _gpu_gather_object(object)
     else:
         return object

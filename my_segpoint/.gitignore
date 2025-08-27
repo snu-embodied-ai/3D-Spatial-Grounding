@@ -1,2 +1,4 @@
-./data/ScanNet200
-./model/modules/embodied-generalist
+data/ScanNet200
+data/scannet
+model/modules/embodied-generalist
+model/modules/Uni3D/path

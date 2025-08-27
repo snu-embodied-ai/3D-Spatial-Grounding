@@ -51,12 +51,12 @@ def linear_warmup_cosine_decay(step, warmup_step, total_step):
 
 
 def get_scheduler(cfg, optimizer, total_steps):
-    lambda_func = lambda step: globals()[cfg.training.schedule.name](step, cfg.training.schedule.args.warmup_steps, total_steps)
+    lambda_func = lambda step: globals()[cfg.train.schedule.name](step, cfg.train.schedule.args.warmup_steps, total_steps)
     return LambdaLR(optimizer=optimizer, lr_lambda=lambda_func)
 
 
 def build_optim(cfg, params, total_steps):
-    optimizer = getattr(optim, cfg.training.optim.name)(params, **OmegaConf.to_container(cfg.training.optim.args, resolve=True))
+    optimizer = getattr(optim, cfg.train.optim.name)(params, **OmegaConf.to_container(cfg.train.optim.args, resolve=True))
     scheduler = get_scheduler(cfg, optimizer, total_steps)
     return optimizer, scheduler
 

@@ -1,5 +1,7 @@
 import torch
 import torch.nn.functional as F
+from typing import List, Dict
+import re
 
 def split_by_SEG(generated_texts: list,
                  seg_token: str = "<SEG>"):
@@ -7,13 +9,13 @@ def split_by_SEG(generated_texts: list,
     all_splits = []
 
     for text in generated_texts:
-        seg_splits = text.split(f" {seg_token}, ")
-        seg_splits[-1] = seg_splits[-1].rstrip(f" {seg_token}.")
-        all_splits.append(seg_splits)
+        seg_splits = text.split(f"{seg_token}")
+        seg_splits = [re.sub(r'^[^A-Za-z]+|[^A-Za-z]+$', '', s) for s in seg_splits]
+        all_splits.append(seg_splits[:-1])      # should remove the final split (.)
 
     return all_splits
 
-def pad_sequences(all_sequences: list[torch.Tensor]):
+def pad_sequences(all_sequences: List[torch.Tensor]):
     """
     Padding the sequences for stacking into batches
 

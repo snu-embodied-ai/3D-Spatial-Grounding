@@ -12,16 +12,14 @@ from omegaconf import OmegaConf
 # from misc import rgetattr
 from trainer.trainer import SegPointTrainer
 
+import faulthandler
+faulthandler.enable()
+
 logger = get_logger(__name__)
 
 
 def main(cfg):
     os.environ['TOKENIZERS_PARALLELISM'] = 'true'   # suppress hf tokenizer warning
-    # naming_keys = [cfg.name]
-    # for name in cfg.naming_keywords:
-    #     key = str(rgetattr(cfg, name))
-    #     if key:
-    #         naming_keys.append(key)
     exp_name = "SegPoint"
 
     # Record the experiment
