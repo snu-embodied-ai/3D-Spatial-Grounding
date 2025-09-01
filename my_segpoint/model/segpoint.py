@@ -1,5 +1,5 @@
 import math
-from typing import List, Dict
+from typing import List, Dict, Tuple
 import random
 
 import torch
@@ -11,7 +11,7 @@ import pandas as pd
 
 import einops
 from peft import LoraConfig, get_peft_model
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, LlavaForConditionalGeneration
 
 from accelerate.logging import get_logger
 
@@ -26,6 +26,9 @@ from trainer.losses import masked_cross_entropy, DiceLoss
 from data.constants.dataset_consts import TASKS, TASK_TYPE
 
 logger = get_logger(__name__)
+
+B_INST, E_INST = "[INST]", "[/INST]"
+B_SYS, E_SYS = "<<SYS>>\n", "\n<</SYS>>\n\n"
 
 class SegPoint(nn.Module):
     def __init__(self, cfg: DictConfig,
@@ -47,16 +50,21 @@ class SegPoint(nn.Module):
         )
 
         self.LLM_tokenizer = AutoTokenizer.from_pretrained(self.LLM_name, trust_remote_code=True)
-        self.LLM_tokenizer.pad_token = self.LLM_tokenizer.eos_token
+        self.LLM_tokenizer.pad_token = self.LLM_tokenizer.unk_token
         
         self.LLM_tokenizer.add_special_tokens({
-            "additional_special_tokens" : [cfg.LLM.seg_token, cfg.LLM.point_token]
-        })
+            "additional_special_tokens" : [cfg.LLM.seg_token, 
+                                           cfg.LLM.point_token,
+                                           cfg.LLM.pc_start_token,
+                                           cfg.LLM.pc_end_token]
+        }, replace_additional_special_tokens=False)
         self.LLM_tokenizer.padding_side = cfg.LLM.padding_side
         base_model.resize_token_embeddings(len(self.LLM_tokenizer))
 
         self.seg_token_id = self.LLM_tokenizer.convert_tokens_to_ids(cfg.LLM.seg_token)
         self.point_token_id = self.LLM_tokenizer.convert_tokens_to_ids(cfg.LLM.point_token)
+        self.pc_start_token_id = self.LLM_tokenizer.convert_tokens_to_ids(cfg.LLM.pc_start_token)
+        self.pc_end_token_id = self.LLM_tokenizer.convert_tokens_to_ids(cfg.LLM.pc_end_token)
 
         if cfg.LLM.LoRA.train_with:
             # 1-1. FREEZE the LLM parameters when training LoRA layers
@@ -73,8 +81,8 @@ class SegPoint(nn.Module):
                 ):
                     p.requires_grad = True
 
-            base_model.eval()
-            base_model.train = disabled_train
+            base_model.model.eval()
+            base_model.model.train = disabled_train
 
             # 1-3. Add LoRA layers
             lora_cfg = LoraConfig(
@@ -115,6 +123,8 @@ class SegPoint(nn.Module):
         # 6. Loss weights
         self.loss_weights = cfg.loss_weights
 
+        assert len(self.LLM_tokenizer) == self.LLM.get_input_embeddings().weight.shape[0]
+
     def count_params(self, parameters):
         tot = sum([math.prod(p.shape) for p in parameters])
         return tot
@@ -139,7 +149,7 @@ class SegPoint(nn.Module):
         frozen_params_size = self.count_params(frozen_named_params.values())
 
         logger.info(
-            f"Build LEO with {self.show_params_size(learnable_params_size+frozen_params_size)} parameters, " +
+            f"Build SegPoint with {self.show_params_size(learnable_params_size+frozen_params_size)} parameters, " +
             f"{self.show_params_size(learnable_params_size)} learnable and " +
             f"{self.show_params_size(frozen_params_size)} frozen"
         )
@@ -172,28 +182,31 @@ class SegPoint(nn.Module):
         """
         batch_size = len(data_dict["num_category"])
         device = next(self.parameters()).device
+        task = data_dict["task"][0].item()
+        task_type = data_dict["task_type"][0].item()
 
-        main_prompt = self.prompts[TASKS[data_dict["task"]]][TASK_TYPE[data_dict["task_type"]]]
+        main_prompt = self.prompts[TASKS[task]][TASK_TYPE[task_type]]
+        instruction_ids = data_dict["instruction_id"]
 
-        # 1. Tokenize USER token and USER prompts (+ ASSISTANT token)
-        # 1-1. "USER: " (USER token)
-        user_token = self.LLM_tokenizer(
-            ["USER: "] * batch_size,
-            return_tensors='pt',
-            # padding='longest'
-        ).to(device)
-
-        # 1-2. " Can you .... ASSISTANT: " (USER prompt)
-        user_prompt = main_prompt.USER
-        if data_dict["task"] == 0 and data_dict["task_type"] == 0:
+        # 1-2. " Can you .... " (USER prompt)
+        user_prompt_list = main_prompt.USER
+        cat_list_prompt = self.prompts.system_prompts.category_list_prompt.format(category_list=', '.join(category_mapping.values()))
+        if task == 0 and task_type == 0:
             # SemanticSegmentation & specific
             batch_user_prompt = []
             for i in range(batch_size):
+                user_prompt = user_prompt_list[instruction_ids[i].item()]
                 category = category_mapping[data_dict["category"][i].item()]
-                batch_user_prompt.append(user_prompt.format(category=category))
-        elif data_dict["task"] == 0 and data_dict["task_type"] == 1:
+
+                final_user_prompt = f"{user_prompt.format(category=category)} {cat_list_prompt} {E_INST}"
+                batch_user_prompt.append(final_user_prompt)
+
+        elif task == 0 and task_type == 1:
             # SemanticSegmentation & all_categories
-            batch_user_prompt = [user_prompt] * batch_size
+            batch_user_prompt = []
+            for i in range(batch_size):
+                user_prompt = user_prompt_list[instruction_ids[i].item()]
+                batch_user_prompt.append(f"{user_prompt} {cat_list_prompt} {E_INST}")
             
         user_prompt_tokens = self.LLM_tokenizer(
             batch_user_prompt,
@@ -201,28 +214,17 @@ class SegPoint(nn.Module):
             padding='longest'
         ).to(device)
 
-        # 2. Tokenize all category names
-        cat_list_prompt = f"Only objects from the following list appears in the point cloud. [{', '.join(category_mapping.values())}]"
-        cat_list_tokens = self.LLM_tokenizer(
-            [cat_list_prompt] * batch_size,
-            return_tensors='pt'
-        ).to(device)
-
-        # 3. Tokenize ASSISTANT token and ASSISTANT prompts
-        assistant_token = self.LLM_tokenizer(
-            ["ASSISTANT: "] * batch_size,
-            return_tensors='pt'
-        ).to(device)
-
         batch_assistant_prompts = []
-        assistant_prompt_template = main_prompt.ASSISTANT
-        if data_dict["task"] == 0 and data_dict["task_type"] == 1:
+        assistant_prompt_list = main_prompt.ASSISTANT
+        if task == 0 and task_type == 1:
             # SemanticSegmentation & all_categories
             for i in range(batch_size):
                 num_cats = data_dict["num_category"][i]
+                prefix, assistant_prompt_template = assistant_prompt_list[instruction_ids[i].item()]
+
                 assistant_prompt = assistant_prompt_template * num_cats
-                assistant_prompt.rstrip(", ")       # Remove last commas
-                # assistant_prompt += "." + self.LLM_tokenizer.eos_token
+                assistant_prompt = assistant_prompt.rstrip(", ")       # Remove last commas
+                assistant_prompt = f"{prefix}{assistant_prompt}. {self.LLM_tokenizer.eos_token}"
 
                 categories = data_dict["category"][i, :num_cats]
                 categories = [category_mapping[cat.item()] for cat in categories]
@@ -231,15 +233,15 @@ class SegPoint(nn.Module):
                     assistant_prompt = assistant_prompt.replace("{category}", cat, 1)
 
                 batch_assistant_prompts.append(assistant_prompt)
-        elif data_dict["task"] == 0 and data_dict["task_type"] == 0:
+        elif task == 0 and task_type == 0:
             # SemanticSegmentation & specific
             for i in range(batch_size):
-                # assistant_prompt = assistant_prompt_template + self.LLM_tokenizer.eos_token
+                assistant_prompt_template = assistant_prompt_list[instruction_ids[i].item()]
                 category = data_dict["category"][i].item()
                 category = category_mapping[category]
                 
                 assistant_prompt = assistant_prompt_template.format(category=category)
-                batch_assistant_prompts.append(assistant_prompt)
+                batch_assistant_prompts.append(f"{assistant_prompt} {self.LLM_tokenizer.eos_token}")
 
         self.LLM_tokenizer.padding_side = 'right'
         # self.LLM_tokenizer.truncation_side = 'right'
@@ -248,42 +250,45 @@ class SegPoint(nn.Module):
             return_tensors='pt',
             padding='longest',
             # truncation=True,
-            return_special_tokens_mask=True
         ).to(device)           # (B, T)
 
         # (Optional) Few shot examples
         if main_prompt.few_shot:
-            if data_dict["task"] == 0 and data_dict["task_type"] == 0:
+            rand_instruct_id = random.randrange(len(user_prompt_list))
+
+            if task == 0 and task_type == 0:
                 # SemanticSegmentation & specific
                 rand_cat = random.choice(list(category_mapping.values()))
-                fewshot_user_prompt = user_prompt.format(category=rand_cat)
-                fewshot_assistant_prompt = assistant_prompt_template.format(category=rand_cat)
-                few_shot_prompt = f"USER: {fewshot_user_prompt} {cat_list_prompt} ASSISTANT: {fewshot_assistant_prompt}"
-            elif data_dict["task"] == 0 and data_dict["task_type"] == 1:
+
+                fewshot_user_prompt = user_prompt_list[rand_instruct_id].format(category=rand_cat)
+                fewshot_assistant_prompt = assistant_prompt_list[rand_instruct_id].format(category=rand_cat)
+                few_shot_prompt = f"USER: [POINT][POINT]... {fewshot_user_prompt} {cat_list_prompt} ASSISTANT: {fewshot_assistant_prompt}"
+            elif task == 0 and task_type == 1:
                 # SemanticSegmentation & all_categories
                 rand_cats = random.sample(list(category_mapping.values()), k=random.randint(1,6))
 
-                fewshot_assistant_prompt = assistant_prompt_template * len(rand_cats)
-                fewshot_assistant_prompt.rstrip(", ")       # Remove last commas
+                prefix, template = assistant_prompt_list[rand_instruct_id]
+                fewshot_assistant_prompt = template * len(rand_cats)
+                fewshot_assistant_prompt = fewshot_assistant_prompt.rstrip(", ")       # Remove last commas
 
                 for cat in rand_cats:
-                    fewshot_assistant_prompt = assistant_prompt.replace("{category}", cat, 1)
+                    fewshot_assistant_prompt = fewshot_assistant_prompt.replace("{category}", cat, 1)
 
-                few_shot_prompt = f"USER: {user_prompt} {cat_list_prompt} ASSISTANT: {fewshot_assistant_prompt}"
+                few_shot_prompt = f"USER: [POINT][POINT]... {user_prompt} {cat_list_prompt} ASSISTANT: {prefix}{fewshot_assistant_prompt}"
         else:
             few_shot_prompt = ""
 
         # 4. Tokenize system prompts
         if self.prompts.system_prompts.add_sys_delimiters:
             sys_prompt = (
-                f"<<SYS>>{self.prompts.system_prompts.text}\n"
-                "Examples:\n"
-                f"{few_shot_prompt}<</SYS>>"
+                f"{B_INST} {B_SYS}{self.prompts.system_prompts.text}\n"
+                "Example:\n"
+                f"{few_shot_prompt}{E_SYS}"
                 )
         else:
             sys_prompt = (
-                f"{self.prompts.system_prompts.text}\n"
-                "Examples:\n"
+                f"{B_INST} {self.prompts.system_prompts.text}\n"
+                "Example:\n"
                 f"{few_shot_prompt}"
             )
 
@@ -294,55 +299,49 @@ class SegPoint(nn.Module):
         ).to(device)
 
         # 5. Remove BOS (<s> in Llama2) to concatenate subsequences into a whole sequence
-        user_token.input_ids = user_token.input_ids[:, 1:]
-        user_token.attention_mask = user_token.attention_mask[:, 1:]
 
         user_prompt_tokens.input_ids = user_prompt_tokens.input_ids[:, 1:]
         user_prompt_tokens.attention_mask = user_prompt_tokens.attention_mask[:, 1:]
 
-        cat_list_tokens.input_ids = cat_list_tokens.input_ids[:, 1:]
-        cat_list_tokens.attention_mask = cat_list_tokens.attention_mask[:, 1:]
-
-        assistant_token.input_ids = assistant_token.input_ids[:, 1:]
-        assistant_token.attention_mask = assistant_token.attention_mask[:, 1:]
+        assistant_prompt_tokens.input_ids = assistant_prompt_tokens.input_ids[:, 1:]
+        assistant_prompt_tokens.attention_mask = assistant_prompt_tokens.attention_mask[:, 1:]
 
         # 6. Get embeddings for each subsequences
         system_prompt_embed = self.LLM.get_input_embeddings()(system_prompt_tokens.input_ids)                                      # (B, T1, hidden_dim)
-        user_embed = self.LLM.get_input_embeddings()(user_token.input_ids)  # (B, 1, hidden_dim)
         user_prompt_embed = self.LLM.get_input_embeddings()(user_prompt_tokens.input_ids)                                      # (B, T2, hidden_dim)
-        cat_list_embed = self.LLM.get_input_embeddings()(cat_list_tokens.input_ids)                             # (B, T', hidden_dim)
 
-        assistant_embed = self.LLM.get_input_embeddings()(assistant_token.input_ids)        # (B, 1, hidden_dim)
         assistant_prompt_embed = self.LLM.get_input_embeddings()(assistant_prompt_tokens.input_ids)         # (B, T3, hidden_dim)
 
         # 7. Get point embeddings/tokens and concatenate all to generate prompt embeddings
         point_embed = data_dict["point_embed"]                # (B, num_groups, hidden_dim)
         point_token_ids = torch.ones((point_embed.size()[:2]), device=device, dtype=torch.int64) * self.point_token_id
-        point_mask = torch.ones(point_embed.size()[:2], device=device)                        # (B, num_groups)         
+
+        pc_start_token_ids = torch.full((batch_size, 1), fill_value=self.pc_start_token_id, device=device, dtype=torch.int64)
+        pc_end_token_ids = torch.full((batch_size, 1), fill_value=self.pc_end_token_id, device=device, dtype=torch.int64)
+        pc_start_embed = self.LLM.get_input_embeddings()(pc_start_token_ids)
+        pc_end_embed = self.LLM.get_input_embeddings()(pc_end_token_ids)
+
+        point_token_ids = torch.cat([pc_start_token_ids, point_token_ids, pc_end_token_ids], dim=1)
+        point_embed = torch.cat([pc_start_embed, point_embed, pc_end_embed], dim=1)
+        point_mask = torch.ones(point_embed.size()[:2], device=device)                        # (B, num_groups + 2) 
 
         # 7-1. Concat fixed length sequences first
         # Assuming task/task types are all the same within a single mini-batch
         inputs_embeds = torch.cat([
             system_prompt_embed, 
-            user_embed, 
             point_embed, 
             user_prompt_embed, 
-            cat_list_embed,
-            assistant_embed], dim=1)
+            ], dim=1)
         input_ids = torch.cat([
             system_prompt_tokens.input_ids, 
-            user_token.input_ids, 
             point_token_ids, 
             user_prompt_tokens.input_ids, 
-            cat_list_tokens.input_ids,
-            assistant_token.input_ids], dim=1)
+            ], dim=1)
         attention_mask = torch.cat([
             system_prompt_tokens.attention_mask,
-            user_token.attention_mask,
             point_mask,
             user_prompt_tokens.attention_mask,
-            cat_list_tokens.attention_mask,
-            assistant_token.attention_mask], dim=1)
+            ], dim=1)
 
         if train:
             # 7-2. Concat assistant prompt embeddings and tokens
@@ -352,17 +351,19 @@ class SegPoint(nn.Module):
             attention_mask = torch.cat([attention_mask, assistant_prompt_tokens.attention_mask], dim=1)
 
             # 7-3. Construct targets
-            targets = torch.zeros_like(attention_mask).long().fill_(-100)
+            targets = torch.full_like(attention_mask, fill_value=-100).long()
 
             # Only apply loss to answer tokens
             targets_idx = assistant_prompt_tokens.attention_mask.bool()
-            targets[:, -targets_idx.size(1):] = assistant_prompt_tokens.input_ids
+            targets[:, -targets_idx.size(1):] = assistant_prompt_tokens.input_ids * targets_idx
 
-            # Do not predict BOS token
-            targets[:, -targets_idx.size(1)] = -100
+            # # Do not predict BOS token
+            # targets[:, -targets_idx.size(1)] = -100
 
             # Create mask for point embeddings and seg tokens (shift to match the indices for output sequences)
-            point_embed_mask = input_ids[:,1:] == self.point_token_id
+            point_start = assistant_prompt_embed.size(1) + user_prompt_embed.size(1) + point_embed.size(1)
+            point_embed_mask = torch.zeros_like(attention_mask).bool()[:,1:]
+            point_embed_mask[:, -point_start:] = input_ids[:,-point_start:] == self.point_token_id
             
             seg_token_mask = torch.zeros_like(point_embed_mask).bool()
             seg_token_mask[:, -targets_idx.size(1):] = input_ids[:,-targets_idx.size(1):] == self.seg_token_id
@@ -373,17 +374,46 @@ class SegPoint(nn.Module):
             }
 
         else:
-            # Remove BOS token since BOS token would be added to input_ids during generate()
-            targets = assistant_prompt_tokens.input_ids[:, 1:]
+            targets = assistant_prompt_tokens.input_ids
 
             # Create mask for point embeddings and seg tokens (shift to match the indices for output sequences)
-            point_embed_mask = input_ids[:,1:] == self.point_token_id
+            point_start = user_prompt_embed.size(1) + point_embed.size(1)
+            point_embed_mask = torch.zeros_like(attention_mask).bool()[:,1:]
+            point_embed_mask[:, -point_start:] = input_ids[:,-point_start:] == self.point_token_id
             
             special_token_masks = {
                 "POINT": point_embed_mask
             }
 
         return inputs_embeds, input_ids, attention_mask, targets, special_token_masks
+
+    def get_seg_hidden_from_generate(self,
+                                     hidden_state: Tuple[Tuple[torch.Tensor]],
+                                     seg_token_mask: torch.Tensor):
+        """
+        Parameters
+        ---
+        hidden_state: Tuple[Tuple[torch.Tensor]]
+            Tuple (one element for each generated token) of tuples (one element for each layer of the decoder) of torch.FloatTensor of shape (batch_size, generated_length, hidden_size).
+        seg_token_mask: torch.Tensor
+            Mask indicating the position of [SEG] token. torch.Tensor of shape (batch_size, seq_length)
+        """
+        B, _ = seg_token_mask.size()
+        device = seg_token_mask.device
+
+        all_seg_hiddens = []
+        for b in range(B):
+            seg_pos = seg_token_mask[b].nonzero(as_tuple=False)
+            if seg_pos.size(0) == 0:
+                seg_hidden = torch.zeros(1, 1, self.LLM.config.hidden_size).to(device)
+            else:
+                seg_hidden = [hidden_state[i][-1][b:b+1] for i in seg_pos]
+                seg_hidden = torch.cat(seg_hidden, dim=1).to(device)
+            
+            all_seg_hiddens.append(seg_hidden)
+        
+        return all_seg_hiddens
+
     
     def seg_batched_projection(self,
                                all_seg_hidden: List[torch.Tensor]):
@@ -409,12 +439,12 @@ class SegPoint(nn.Module):
         padded = [F.pad(seg_h, (0, 0, 0, max_len - seg_h.shape[0])) for seg_h in all_seg_hidden]
         stacked = torch.stack(padded)  # Shape: (B, max_len, D)
 
-        B, S, D = stacked.size()
+        B, _, _ = stacked.size()
         projected_seg_hidden = self.seg_projector(stacked)
 
-        mask = torch.zeros((B,S), dtype=bool)
-        for orig_len in original_lengths:
-            mask[:,:orig_len] = True
+        mask = torch.zeros((B, max_len), dtype=bool)
+        for i, orig_len in enumerate(original_lengths):
+            mask[i,:orig_len] = True
 
         return projected_seg_hidden, mask
 
@@ -455,7 +485,7 @@ class SegPoint(nn.Module):
                 return_dict=True,
                 output_hidden_states=True,
             )
-        logits = outputs.logits.bfloat16()
+        logits = outputs.logits
 
         # 5. Get hidden states of POINT sequences and <SEG>
         # 5-1. Get indices of point tokens for each batch
@@ -495,9 +525,11 @@ class SegPoint(nn.Module):
         num_tokens_for_loss = (shift_labels >= 0).int().sum(1)      # (B,)
 
         shift_logits = einops.rearrange(shift_logits, 'b t d -> (b t) d')
-        shift_labels = einops.rearrange(shift_labels, 'b t -> (b t)')
+        shift_labels = einops.rearrange(shift_labels, 'b t -> (b t)').to(device)
 
-        shift_labels = shift_labels.to(device)
+        loss_weight = torch.ones(len(self.LLM_tokenizer), device=device)
+        loss_weight[self.seg_token_id] = 10
+
         text_loss = F.cross_entropy(shift_logits, shift_labels, reduction='none')
         text_loss = einops.rearrange(text_loss, '(b t) -> b t', b=batch_size)
         text_loss = text_loss.sum(1) / num_tokens_for_loss   # (B,)
@@ -511,7 +543,10 @@ class SegPoint(nn.Module):
         loss = text_loss * self.loss_weights[0] + ce_loss * self.loss_weights[1] + dice_loss * self.loss_weights[2]
         
         # Not averaging the loss inside the forward (train) function. Mean operation will be done in Trainer
-        data_dict.update({'loss': loss})
+        data_dict.update({'loss': loss,
+                          'text_loss': text_loss,
+                          'CE_loss': ce_loss,
+                          'Dice_loss': dice_loss})
 
         return data_dict
     
@@ -519,10 +554,10 @@ class SegPoint(nn.Module):
     def generate(self,
                  data_dict,
                  use_nucleus_sampling: bool = False,
-                 num_beams: int = 5,
+                 num_beams: int = 1,
                  max_new_tokens: int = 64,
                  min_new_tokens: int = 1,
-                 repetition_penalty: float = 3.0,
+                 repetition_penalty: float = 5.0,
                  length_penalty: float = 1.0,
                  num_captions: int = 1,
                  temperature: float = 1.0):
@@ -570,24 +605,23 @@ class SegPoint(nn.Module):
 
         point_hidden = einops.rearrange(point_hidden, '(b n) d -> b n d', b=batch_size)
 
-        # 4. BOS token as condition
-        bos_tokens = self.LLM_tokenizer(
-            [self.LLM_tokenizer.bos_token] * batch_size,
-            return_tensors='pt',
-        ).to(device)
-        bos_tokens_ids = bos_tokens.input_ids[:, 0:1]   # (B, 1)
-        bos_tokens_attn = bos_tokens.attention_mask[:, 0:1]   # (B, 1)
-        bos_embeds = self.LLM.get_input_embeddings()(bos_tokens_ids)   # (B, 1, D)
+        # # 4. BOS token as condition
+        # bos_tokens = self.LLM_tokenizer(
+        #     [self.LLM_tokenizer.bos_token] * batch_size,
+        #     return_tensors='pt',
+        # ).to(device)
+        # bos_tokens_ids = bos_tokens.input_ids[:, 0:1]   # (B, 1)
+        # bos_tokens_attn = bos_tokens.attention_mask[:, 0:1]   # (B, 1)
+        # bos_embeds = self.LLM.get_input_embeddings()(bos_tokens_ids)   # (B, 1, D)
 
-        # Concatenate the BOS token
-        input_ids = torch.cat([input_ids, bos_tokens_ids], dim=1)       # (B, T1+O+T2+1)
-        inputs_embeds = torch.cat([inputs_embeds, bos_embeds], dim=1)   # (B, T1+O+T2+1, D)
-        attention_mask = torch.cat([attention_mask, bos_tokens_attn], dim=1)   # (B, T1+O+T2+1)
+        # # Concatenate the BOS token
+        # input_ids = torch.cat([input_ids, bos_tokens_ids], dim=1)       # (B, T1+O+T2+1)
+        # inputs_embeds = torch.cat([inputs_embeds, bos_embeds], dim=1)   # (B, T1+O+T2+1, D)
+        # attention_mask = torch.cat([attention_mask, bos_tokens_attn], dim=1)   # (B, T1+O+T2+1)
 
         # Think about formatting the output
         # cutting off the irrelevant outputs
         # OR adding some more system prompts -> YOu should output {category} <SEG>, .... 
-        # OR refer to strict output format (JSON) in Llama
         with maybe_autocast(self):
             outputs = self.LLM.generate(
                 inputs=input_ids,
@@ -595,34 +629,23 @@ class SegPoint(nn.Module):
                 attention_mask=attention_mask,
                 return_dict_in_generate=True,
                 output_hidden_states=True,
-                detach_hidden=True,
                 pad_token_id=self.LLM_tokenizer.pad_token_id,
                 eos_token_id=self.LLM_tokenizer.eos_token_id,
                 # output_scores=True,
-                output_all_beams=False,
-                do_sample=use_nucleus_sampling,
-                # top_p=top_p,
-                temperature=temperature,
-                num_beams=num_beams,
                 max_new_tokens=max_new_tokens,
                 min_new_tokens=min_new_tokens,
-                repetition_penalty=repetition_penalty,
                 length_penalty=length_penalty,
-                num_return_sequences=num_captions,
             )
         
-        outputs.sequences[outputs.sequences == self.LLM_tokenizer.unk_token_id] = self.LLM_tokenizer.eos_token_id
+        # outputs.sequences[outputs.sequences == self.LLM_tokenizer.unk_token_id] = self.LLM_tokenizer.eos_token_id
 
-        # Remove all EOS tokens (</s>)
-        generated_seq = outputs.sequences[:, inputs_embeds.size(1):-1]
+        print("generated:", self.LLM_tokenizer.batch_decode(outputs.sequences, skip_special_tokens=False))
+        generated_seq = outputs.sequences[:, inputs_embeds.size(1):]
         seg_token_mask = generated_seq == self.seg_token_id
         valid_seq_len = generated_seq.size(1)
+        print(outputs.sequences)
 
-        # Trim EOS tokens that are removed in generated_seq
-        final_hidden_state = outputs.hidden_states[:, :valid_seq_len, :]      # (batch_size, valid_seq_len, hidden_dim)
-
-        # Get the hidden states of <SEG> token for each batch
-        all_seg_hidden = [h[mask] for h, mask in zip(final_hidden_state, seg_token_mask)]
+        all_seg_hidden = self.get_seg_hidden_from_generate(outputs.hidden_states, seg_token_mask)
 
         # 5. Geometric-guided Feature Propagation
         gfp_feats = self.GFP(intermediate_features=intermed_feats,
@@ -632,7 +655,8 @@ class SegPoint(nn.Module):
                              xyz=data_dict["xyz"])
 
         # 6. Project <SEG> hidden state into the GFP feature dimension
-        pad_seg_hidden_proj, valid_inds = self.seg_batched_projection(all_seg_hidden)
+        pad_seg_hidden_proj = self.seg_projector(all_seg_hidden[0])
+        # pad_seg_hidden_proj, valid_inds = self.seg_batched_projection(all_seg_hidden)
 
         # 7. Dot product between <SEG> hidden state and gfp feats
         output_mask = torch.matmul(pad_seg_hidden_proj, gfp_feats.transpose(1,2))       # (B, G, N) -> padded version
@@ -641,8 +665,11 @@ class SegPoint(nn.Module):
         # all_output_seq = [seq[~mask] for seq, mask in zip(generated_seq, seg_token_mask)]
         all_output_txt = self.LLM_tokenizer.batch_decode(generated_seq)
         data_dict["gen_answers"] = all_output_txt
-        data_dict["output_mask"] = output_mask
-        data_dict["valid_output_mask_indices"] = valid_inds
+        if pad_seg_hidden_proj.size(1) == 0:
+            data_dict["output_mask"] = 0
+        else:    
+            data_dict["output_mask"] = output_mask
+        # data_dict["valid_output_mask_indices"] = valid_inds
 
         all_gt_txt = self.LLM_tokenizer.batch_decode(targets)
         data_dict["gt_text"] = all_gt_txt

@@ -2,3 +2,4 @@ data/ScanNet200
 data/scannet
 model/modules/embodied-generalist
 model/modules/Uni3D/path
+model/pretrained

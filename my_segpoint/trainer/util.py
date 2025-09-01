@@ -4,7 +4,7 @@ from typing import List, Dict
 import re
 
 def split_by_SEG(generated_texts: list,
-                 seg_token: str = "<SEG>"):
+                 seg_token: str = "[SEG]"):
     
     all_splits = []
 
@@ -14,6 +14,27 @@ def split_by_SEG(generated_texts: list,
         all_splits.append(seg_splits[:-1])      # should remove the final split (.)
 
     return all_splits
+
+
+def extract_seg_tokens(output_str):
+    """
+    Extract categories associated with [SEG], ignoring prefixes like 'Mask:' or 'Segmentation:'.
+    Handles multi-word category names.
+    """
+    # Split by [SEG]
+    segments = output_str.split('[SEG]')
+    
+    # Extract last word(s) before [SEG] in each segment
+    categories = []
+    for seg in segments[:-1]:  # all except the last empty split
+        # Remove common prefixes and punctuation
+        seg = seg.strip()
+        seg = re.sub(r'^(Mask:|Segmentation:|Output:)\s*', '', seg, flags=re.IGNORECASE)
+        # Remove trailing punctuation
+        seg = seg.rstrip(',:;|')
+        categories.append(seg.strip())
+    
+    return categories
 
 def pad_sequences(all_sequences: List[torch.Tensor]):
     """

@@ -17,7 +17,7 @@ from model.segpoint import SegPoint
 from misc.accelerator import CustomAccelerator
 from trainer.build import Tracker, latest_checkpoint, build_optim
 from trainer.metrics import compute_mIoU_binary_groups
-from trainer.util import split_by_SEG, pad_sequences
+from trainer.util import split_by_SEG, extract_seg_tokens, pad_sequences
 
 from data.constants.dataset_consts import DATASETS
 from data.constants.scannet import CLASS_LABELS as SCANNET_CLASSES, VALID_CLASS_ID_TO_LABEL as SCANNET_ID_TO_LABEL
@@ -168,7 +168,7 @@ class SegPointTrainer:
 
     
     def forward(self, data_dict, inference=False):
-        if data_dict["dataset_idx"] == 0:
+        if data_dict["dataset_idx"][0] == 0:
             # ScanNet
             data_dict["category_mapping"] = SCANNET_ID_TO_LABEL
         else:
@@ -214,10 +214,10 @@ class SegPointTrainer:
         B, num_pred_segs, num_points = data_dict["output_mask"].size()
         _, num_cats, _ = data_dict["mask"].size()
 
-        valid_output_mask_indices = data_dict["valid_output_mask_indices"]      # (B, num_output_seg_tokens)
+        # valid_output_mask_indices = data_dict["valid_output_mask_indices"]      # (B, num_output_seg_tokens)
 
         # ScanNet
-        if data_dict["dataset_idx"] == 0:
+        if data_dict["dataset_idx"][0] == 0:
             valid_class_labels = sorted(SCANNET_CLASSES)
         # Others (Add later)
         else:
@@ -230,8 +230,8 @@ class SegPointTrainer:
         # 1. Compare ground truth text and output texts
         print("gen answers: ", data_dict["gen_answers"])
         print("gt text: ", data_dict["gt_text"])
-        output_split = split_by_SEG(data_dict["gen_answers"])
-        gt_split = split_by_SEG(data_dict["gt_text"])
+        output_split = extract_seg_tokens(data_dict["gen_answers"][0])
+        gt_split = extract_seg_tokens(data_dict["gt_text"][0])
 
         print("output_splits:", output_split)
         print("gt_splits:", gt_split)
@@ -302,7 +302,10 @@ class SegPointTrainer:
 
                 # 3. record
                 # Save PLY for the training outputs..?
-                loss_dict = {'overall': loss_all}
+                loss_dict = {'overall': loss_all,
+                             'text_loss': data_dict['text_loss'].mean(),
+                             'CE_loss': data_dict['CE_loss'].mean(),
+                             'Dice_loss': data_dict['Dice_loss'].mean()}
                 self.log(loss_dict, mode='train', task='loss')
                 self.exp_tracker.step_loader()
                 pbar.update(1)

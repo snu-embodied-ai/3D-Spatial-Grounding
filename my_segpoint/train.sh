@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=1,2,3,4
+export CUDA_VISIBLE_DEVICES=2,3,4
 
 accelerate launch \
     --config_file cfg/launch/launch.yaml \

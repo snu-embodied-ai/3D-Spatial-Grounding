@@ -24,21 +24,23 @@ Point_encoder:
     pc_model: eva02_base_patch14_448
     pretrained_pc: ""
     ckpt_path: model//modules/Uni3D/path/to/checkpoints/model.pt
-    drop_path_rate: 0.20
+    drop_path_rate: 0.0
 
     PointcloudEncoder:
       token_unit: region
       pc_feat_dim: 768
       embed_dim: 1024
       group_size: 64
-      num_group: 512          # Too many..?? MODIFICATION needed
+      num_group: 16          # Too many..?? MODIFICATION needed
       pc_encoder_dim: 512
       patch_dropout: 0.0
   
   CA_Uni3D:
+    num_groups: 32
+    group_size: 1024
     flash_attention: True
     num_heads: 8
-    dropout_rate: 0.5
+    dropout_rate: 0.20
     gem_dim: 256
     align_clip_dim: True
     num_CA_layers: 4
@@ -46,13 +48,13 @@ Point_encoder:
 
 GFP:
   flash_attention: True
-  selected_intermed_idx: [2, 3, 4]
-  num_intermed_feats: [4096, 2048, 512]
+  selected_intermed_idx: [-2, -1]
+  num_intermed_feats: [2048, 4096]
   gem_dim: 256
   pc_feat_dim: 768
   num_neighbors: 5
   num_heads: 8
-  dropout_rate: 0.5
+  dropout_rate: 0.2
   LLM_hidden_dim: 4096
 
 
@@ -62,8 +64,10 @@ LLM:
   truncation_side: right
   padding_side: right
 
-  seg_token: "<SEG>"
-  point_token: "<POINT>"
+  seg_token: "[SEG]"
+  point_token: "[POINT]"
+  pc_start_token: "[PC_START]"
+  pc_end_token: "[PC_END]"
 
   LoRA:
     train_with: True

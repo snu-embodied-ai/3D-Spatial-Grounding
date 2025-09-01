@@ -166,6 +166,9 @@ class SemanticSegmentationDataset(SegPointDatasetBase):
         self.split = split
         self.seg_type = segmentation_type
 
+        self.task_instructions = self.instructions.SemanticSegmentation[self.seg_type]
+        self.num_task_instructions = len(self.task_instructions.USER)
+
         # Load the metadata for each dataset (scene id, categories, ...)
         self.all_samples = []
         for dataset_name, dataset_paths in self.cfg.items():
@@ -173,47 +176,58 @@ class SemanticSegmentationDataset(SegPointDatasetBase):
             with open(metadata_dir / f"{self.split}.txt", 'r') as f:
                 scenes = f.read().split("\n")
 
-            self.all_samples.extend(list(zip([dataset_name] * len(scenes), scenes)))
+            for scene in scenes:
+                for i in range(self.num_task_instructions):
+                    self.all_samples.append([dataset_name, scene, i])
+
+        self.scene_cache= dict()
             
     def __getitem__(self, index):
         # Dictionary with keys - 'scene_id', 'xyz', 'features', 'task', 'task_type', 'mask(labels)', 'category' (for specific), (+ @)
         try:
-            dataset_name, scene_id = self.all_samples[index]
+            dataset_name, scene_id, instruction_id = self.all_samples[index]
 
-            # 1. Get dataset config to get file paths & Get info files
+            # Store per scene pointcloud data for efficiency
             dataset_paths = self.cfg[dataset_name]
-            root_dir = Path(dataset_paths.root_dir)
-            scenes_dir = root_dir / dataset_paths.scenes_dir
+            key = f"{dataset_name}/{scene_id}"
+            if key in self.scene_cache:
+                features, labels = self.scene_cache[key]
+            else:
+                # 1. Get dataset config to get file paths & Get info files
+                root_dir = Path(dataset_paths.root_dir)
+                scenes_dir = root_dir / dataset_paths.scenes_dir
 
-            # 2. Get pointcloud
-            # 2-1. Read PLY
-            ply_name = f"{scene_id}{dataset_paths.ply_name}"
-            ply_path = scenes_dir / scene_id / ply_name
-            if not ply_path.exists():
-                raise FileNotFoundError(f"PLY file not found: {ply_path}")
-            
-            pcd = o3d.io.read_point_cloud(ply_path)
-            xyz = np.asarray(pcd.points)
-            color = np.asarray(pcd.colors)
+                # 2. Get pointcloud
+                # 2-1. Read PLY
+                ply_name = f"{scene_id}{dataset_paths.ply_name}"
+                ply_path = scenes_dir / scene_id / ply_name
+                if not ply_path.exists():
+                    raise FileNotFoundError(f"PLY file not found: {ply_path}")
+                
+                pcd = o3d.io.read_point_cloud(ply_path)
+                xyz = np.asarray(pcd.points)
+                color = np.asarray(pcd.colors)
 
-            if xyz.shape[0] == 0:
-                raise ValueError(f"No points found in {ply_path}")
+                if xyz.shape[0] == 0:
+                    raise ValueError(f"No points found in {ply_path}")
 
-            if color.shape[0] != xyz.shape[0]:
-                raise ValueError(f"Color and XYZ size mismatch in {ply_path}")
+                if color.shape[0] != xyz.shape[0]:
+                    raise ValueError(f"Color and XYZ size mismatch in {ply_path}")
 
-            # 2-2. Preprocess features
-            features = np.concatenate([xyz, color], axis=-1)
-            features = self.preprocess_pcd(features)
+                # 2-2. Preprocess features
+                features = np.concatenate([xyz, color], axis=-1)
+                features = self.preprocess_pcd(features)
 
-            # 2-3. Get labels per point
-            label_pcd = PlyData.read(ply_path)
-            if "label" not in label_pcd["vertex"].data.dtype.names:
-                raise KeyError(f"'label' not found in {ply_path}")
-            
-            labels = np.asarray(label_pcd['vertex'].data['label'])
-            if labels.shape[0] != xyz.shape[0]:
-                raise ValueError(f"Labels length does not match points in {ply_path}")
+                # 2-3. Get labels per point
+                label_pcd = PlyData.read(ply_path)
+                if "label" not in label_pcd["vertex"].data.dtype.names:
+                    raise KeyError(f"'label' not found in {ply_path}")
+                
+                labels = np.asarray(label_pcd['vertex'].data['label'])
+                if labels.shape[0] != xyz.shape[0]:
+                    raise ValueError(f"Labels length does not match points in {ply_path}")
+                
+                self.scene_cache[key] = (features, labels)
 
             if dataset_paths.num_samples is not None:
                 features, labels = self.per_cat_sample(features, labels, dataset_paths.num_samples, shuffle=True)
@@ -251,21 +265,22 @@ class SemanticSegmentationDataset(SegPointDatasetBase):
             else:
                 raise ValueError(f"Unknown segmentation type: {self.seg_type}")
 
-            # 3. Generate Data Dictionary
+            # 4. Generate Data Dictionary
             # Store the indices instead of storing the raw string for converting torch tensors
             data_dict = {
-                "dataset_idx": DATASETS.index(dataset_name),
+                "dataset_idx": torch.tensor(DATASETS.index(dataset_name), dtype=torch.long),
                 "xyz": features[:,:3],
                 "features": features,
-                "task": TASKS.index("SemanticSegmentation"),
-                "task_type": TASK_TYPE.index(self.seg_type),
+                "task": torch.tensor(TASKS.index("SemanticSegmentation"), dtype=torch.long),
+                "task_type": torch.tensor(TASK_TYPE.index(self.seg_type), dtype=torch.long),
                 "mask": mask,
                 "category": category,
-                "num_category": num_category
+                "num_category": torch.tensor(num_category, dtype=torch.long),
+                "instruction_id": torch.tensor(instruction_id, dtype=torch.long)
             }
 
             assert isinstance(data_dict, dict), (index, dataset_name, scene_id)
-            for k in ["dataset_idx","xyz","features","task","task_type","mask","category","num_category"]:
+            for k in ["dataset_idx","xyz","features","task","task_type","mask","category","num_category", "instruction_id"]:
                 assert k in data_dict, (k, index, dataset_name, scene_id)
 
             return data_dict
@@ -312,7 +327,6 @@ def default_collate_fn(batch):
     batched_categories = torch.full((len(batch), max_num_cats), fill_value=-100)
     batched_padding_mask = torch.zeros((len(batch), max_num_points), dtype=bool)
     batched_padding_cats = torch.zeros_like(batched_masks, dtype=bool)
-    batched_num_cats = []
 
     for i, sample in enumerate(batch):
         num_points, _ = sample["features"].size()
@@ -323,17 +337,17 @@ def default_collate_fn(batch):
         batched_categories[i, :num_cats] = sample["category"]
         batched_padding_mask[i, :num_points] = True
         batched_padding_cats[i, :num_cats, :num_points] = True
-        batched_num_cats.append(sample["num_category"])
 
     data_dict = {
-        "dataset_idx": batch[0]["dataset_idx"],
+        "dataset_idx": torch.stack([sample["dataset_idx"] for sample in batch]),
         "xyz": batched_features[:,:,:3],
         "features": batched_features,
-        "task": batch[0]["task"],
-        "task_type": batch[0]["task_type"],
+        "task": torch.stack([sample["task"] for sample in batch]),
+        "task_type": torch.stack([sample["task_type"] for sample in batch]),
         "mask": batched_masks,
         "category": batched_categories,
-        "num_category": torch.tensor(batched_num_cats),
+        "num_category": torch.stack([sample["num_category"] for sample in batch]),
+        "instruction_id": torch.stack([sample["instruction_id"] for sample in batch]),
         "padding_mask": batched_padding_mask,
         "valid_gt_mask": batched_padding_cats
     }
