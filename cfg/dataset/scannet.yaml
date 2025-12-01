@@ -1,0 +1,35 @@
+Region:
+  points_per_region: 512
+  region_threshold: 5
+  region_size: 0.1
+  ground_height: 0.04
+  clip_bound: ""
+  # scale_augmentation_bound: [0.9, 1.1]
+  # rotation_augmentation_bound: [-1/64, 1/64, -1/64, 1/64, -1, 1]
+  translation_augmentation_ratio_bound: [-0.2, 0.2, -0.2, 0.2, 0, 0]
+
+grid_size: 0.002
+use_rgb: True
+use_normal: False
+# use_whole: False
+max_num_tokens: 350
+
+only_test: False
+
+train:
+  data_dir: scenes/3rscan
+  num_workers: 5
+  batch_size: 8
+  pin_memory: True
+
+val:
+  data_dir: scenes/3rscan
+  num_workers: 2
+  batch_size: 1
+  pin_memory: True
+
+test:
+  data_dir: scenes/3rscan
+  num_workers: 2
+  batch_size: 1
+  pin_memory: True

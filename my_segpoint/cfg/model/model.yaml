@@ -23,7 +23,7 @@ Point_encoder:
     freeze: True
     pc_model: eva02_base_patch14_448
     pretrained_pc: ""
-    ckpt_path: model//modules/Uni3D/path/to/checkpoints/model.pt
+    ckpt_path: model/modules/Uni3D/path/to/checkpoints/model.pt
     drop_path_rate: 0.0
 
     PointcloudEncoder:

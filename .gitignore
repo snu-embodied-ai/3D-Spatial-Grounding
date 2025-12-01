@@ -13,3 +13,6 @@ notes/
 data/RoboSpatial
 data/new_anno/out
 scenes
+data/annotation/output
+*.vscode*
+hf_token.txt
